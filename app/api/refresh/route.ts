@@ -6,7 +6,11 @@ import { assess } from "@/lib/signals";
 
 export const maxDuration = 300;
 
-const MAX_SYMBOLS_PER_RUN = 150; // bound credits/time even if the DB grows
+// Twelve Data free tier is 8 CREDITS/MINUTE (1 symbol = 1 credit), so we pace at
+// one 8-symbol batch per minute. maxDuration is 300s, so ~5 batches fit per run;
+// cap symbols/run accordingly. Surplus symbols rotate in via the stalest-first
+// ordering on subsequent runs. (Raise both if you move to a paid tier.)
+const MAX_SYMBOLS_PER_RUN = 36;
 
 /** Constant-time string compare (avoids leaking the secret via timing). */
 function safeEqual(a: string, b: string): boolean {
@@ -112,8 +116,9 @@ export async function GET(req: NextRequest) {
     if (stubRows.length) await admin.from("symbol_signals").upsert(stubRows); // bump last-attempt
     if (histRows.length) await admin.from("signal_history").upsert(histRows);
 
-    // Respect the free tier's 8 requests/min between chunks.
-    if (i + CHUNK < symbols.length) await new Promise((r) => setTimeout(r, 8000));
+    // Free tier = 8 credits/minute, and each 8-symbol batch spends 8 credits, so
+    // wait a full minute (+margin) before the next batch or Twelve Data 429s the rest.
+    if (i + CHUNK < symbols.length) await new Promise((r) => setTimeout(r, 62000));
   }
 
   return NextResponse.json({ updated, total: symbols.length, errors: errors.slice(0, 5) });
