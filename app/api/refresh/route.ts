@@ -98,6 +98,7 @@ export async function GET(req: NextRequest) {
       sigRows.push({
         symbol: sym,
         price: s.price,
+        prev_close: closes.length >= 2 ? closes[closes.length - 2] : null,
         zone_low: s.zoneLow,
         zone_high: s.zoneHigh,
         rsi: s.rsi,

@@ -1,13 +1,19 @@
 -- Stocky Watcher — Supabase schema (run in the SQL editor, or via `supabase db push`).
 -- Auth is handled by Supabase Auth (auth.users). These are the app tables.
 
--- 1) Per-user watchlist -------------------------------------------------------
+-- 1) Per-user watchlist + holdings --------------------------------------------
+-- One row per tracked symbol. With non-empty `lots` it's a held position
+-- (watch_only=false); otherwise it's watch-only. Mirrors the Stocky device model.
 create table if not exists public.watchlist (
-  id         uuid primary key default gen_random_uuid(),
-  user_id    uuid not null references auth.users (id) on delete cascade,
-  symbol     text not null check (symbol ~ '^[A-Z0-9][A-Z0-9.\-]{0,15}$'),
-  list       text not null default 'Watchlist',
-  created_at timestamptz not null default now(),
+  id          uuid primary key default gen_random_uuid(),
+  user_id     uuid not null references auth.users (id) on delete cascade,
+  symbol      text not null check (symbol ~ '^[A-Z0-9][A-Z0-9.\-]{0,15}$'),
+  list        text not null default 'Watchlist',
+  watch_only  boolean not null default true,
+  alert_above double precision,
+  alert_below double precision,
+  lots        jsonb not null default '[]'::jsonb,   -- [{qty, price, date?(epoch s)}]
+  created_at  timestamptz not null default now(),
   unique (user_id, symbol)
 );
 create index if not exists watchlist_user_idx on public.watchlist (user_id);
@@ -17,6 +23,7 @@ alter table public.watchlist enable row level security;
 create policy "watchlist owner read"   on public.watchlist for select using (auth.uid() = user_id);
 create policy "watchlist owner insert" on public.watchlist for insert with check (auth.uid() = user_id);
 create policy "watchlist owner delete" on public.watchlist for delete using (auth.uid() = user_id);
+create policy "watchlist owner update" on public.watchlist for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
 -- Cap watchlist size per user (defense-in-depth; the server action also checks).
 -- Protects the shared market-data budget from one account adding thousands of names.
@@ -41,6 +48,7 @@ create trigger watchlist_cap before insert on public.watchlist
 create table if not exists public.symbol_signals (
   symbol      text primary key,
   price       double precision,
+  prev_close  double precision,   -- previous daily close (for day %)
   zone_low    double precision,
   zone_high   double precision,
   rsi         double precision,
