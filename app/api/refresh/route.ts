@@ -47,16 +47,21 @@ export async function GET(req: NextRequest) {
   const allSymbols = Array.from(new Set((rows ?? []).map((r) => r.symbol as string)));
   if (allSymbols.length === 0) return NextResponse.json({ updated: 0, note: "no symbols" });
 
-  // Fairness: refresh the STALEST symbols first, so when the total exceeds the
-  // per-run cap, coverage rotates across runs instead of starving later tickers.
-  const { data: meta } = await admin
+  const errors: string[] = [];
+
+  // Fairness: refresh the STALEST symbols first — ordered by last ATTEMPT (recorded
+  // below even on failure), so coverage rotates across runs and a perpetually-failing
+  // ticker can't camp at the front of the queue and starve the rest.
+  const { data: meta, error: metaErr } = await admin
     .from("symbol_signals")
     .select("symbol, updated_at")
     .in("symbol", allSymbols);
+  if (metaErr) errors.push(`meta: ${metaErr.message}`);
   const lastUpdated = new Map(
     (meta ?? []).map((m) => [m.symbol as string, (m.updated_at as string) ?? ""])
   );
   const symbols = allSymbols
+    .slice()
     .sort((a, b) => (lastUpdated.get(a) ?? "").localeCompare(lastUpdated.get(b) ?? ""))
     .slice(0, MAX_SYMBOLS_PER_RUN);
 
@@ -64,7 +69,6 @@ export async function GET(req: NextRequest) {
   const nowIso = new Date().toISOString();
   const CHUNK = 8; // conservative batch size for the free tier (tune with the real key)
   let updated = 0;
-  const errors: string[] = [];
 
   for (let i = 0; i < symbols.length; i += CHUNK) {
     const chunk = symbols.slice(i, i + CHUNK);
@@ -76,10 +80,16 @@ export async function GET(req: NextRequest) {
     }
 
     const sigRows = [];
+    const stubRows: { symbol: string; updated_at: string }[] = [];
     const histRows = [];
     for (const sym of chunk) {
       const closes = closesMap[sym];
-      if (!closes || closes.length < 15) continue;
+      if (!closes || closes.length < 15) {
+        // Record the attempt so a failing/unknown ticker rotates to the BACK of
+        // the staleness queue (its last-good signal, if any, is preserved).
+        stubRows.push({ symbol: sym, updated_at: nowIso });
+        continue;
+      }
       const s = assess({ closes });
       sigRows.push({
         symbol: sym,
@@ -99,6 +109,7 @@ export async function GET(req: NextRequest) {
       updated++;
     }
     if (sigRows.length) await admin.from("symbol_signals").upsert(sigRows);
+    if (stubRows.length) await admin.from("symbol_signals").upsert(stubRows); // bump last-attempt
     if (histRows.length) await admin.from("signal_history").upsert(histRows);
 
     // Respect the free tier's 8 requests/min between chunks.
