@@ -92,7 +92,7 @@ export default async function Dashboard() {
 
       {rows.length > 0 && !haveSignals && (
         <p className="mt-3 text-sm text-zinc-500">
-          Signals populate after the first refresh (runs hourly; see SETUP.md to trigger one now).
+          Signals populate after the first refresh (runs daily; see SETUP.md to trigger one now).
         </p>
       )}
     </div>
