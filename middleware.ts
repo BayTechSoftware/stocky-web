@@ -43,6 +43,6 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  // Run on everything except static assets and the cron route (secret-protected).
-  matcher: ["/((?!_next/static|_next/image|favicon.ico|api/refresh).*)"],
+  // Run on everything except static assets and the API routes (they do their own auth).
+  matcher: ["/((?!_next/static|_next/image|favicon.ico|api/).*)"],
 };

@@ -1,6 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { addSymbol, signOut } from "../actions";
 import WatchlistTable, { type Row, type SigRow } from "./watchlist-table";
+import DevicePairing, { type DeviceToken } from "./device-pairing";
 
 function Stat({ label, value, tone }: { label: string; value: number; tone: string }) {
   const tones: Record<string, string> = {
@@ -35,6 +36,12 @@ export default async function Dashboard() {
     signals = (data ?? []) as SigRow[];
   }
   const bySym = new Map(signals.map((s) => [s.symbol, s]));
+
+  const { data: deviceData } = await supabase
+    .from("device_tokens")
+    .select("id, label, created_at, last_used_at")
+    .order("created_at", { ascending: false });
+  const devices = (deviceData ?? []) as DeviceToken[];
 
   const rows: Row[] = watch.map((w) => ({
     symbol: w.symbol,
@@ -95,6 +102,8 @@ export default async function Dashboard() {
           Signals populate after the first refresh (runs daily; see SETUP.md to trigger one now).
         </p>
       )}
+
+      <DevicePairing tokens={devices} />
     </div>
   );
 }
