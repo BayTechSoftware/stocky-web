@@ -44,10 +44,21 @@ export async function GET(req: NextRequest) {
   const { data: rows, error } = await admin.from("watchlist").select("symbol");
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  const symbols = Array.from(new Set((rows ?? []).map((r) => r.symbol as string)))
-    .sort()
+  const allSymbols = Array.from(new Set((rows ?? []).map((r) => r.symbol as string)));
+  if (allSymbols.length === 0) return NextResponse.json({ updated: 0, note: "no symbols" });
+
+  // Fairness: refresh the STALEST symbols first, so when the total exceeds the
+  // per-run cap, coverage rotates across runs instead of starving later tickers.
+  const { data: meta } = await admin
+    .from("symbol_signals")
+    .select("symbol, updated_at")
+    .in("symbol", allSymbols);
+  const lastUpdated = new Map(
+    (meta ?? []).map((m) => [m.symbol as string, (m.updated_at as string) ?? ""])
+  );
+  const symbols = allSymbols
+    .sort((a, b) => (lastUpdated.get(a) ?? "").localeCompare(lastUpdated.get(b) ?? ""))
     .slice(0, MAX_SYMBOLS_PER_RUN);
-  if (symbols.length === 0) return NextResponse.json({ updated: 0, note: "no symbols" });
 
   const today = new Date().toISOString().slice(0, 10);
   const nowIso = new Date().toISOString();

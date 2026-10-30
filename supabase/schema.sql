@@ -5,7 +5,7 @@
 create table if not exists public.watchlist (
   id         uuid primary key default gen_random_uuid(),
   user_id    uuid not null references auth.users (id) on delete cascade,
-  symbol     text not null,
+  symbol     text not null check (symbol ~ '^[A-Z0-9][A-Z0-9.\-]{0,15}$'),
   list       text not null default 'Watchlist',
   created_at timestamptz not null default now(),
   unique (user_id, symbol)
@@ -21,8 +21,12 @@ create policy "watchlist owner delete" on public.watchlist for delete using (aut
 -- Cap watchlist size per user (defense-in-depth; the server action also checks).
 -- Protects the shared market-data budget from one account adding thousands of names.
 create or replace function public.enforce_watchlist_cap()
-returns trigger language plpgsql as $$
+returns trigger language plpgsql
+set search_path = public
+as $$
 begin
+  -- Serialize per user so two concurrent inserts can't both pass the count check.
+  perform pg_advisory_xact_lock(hashtext(new.user_id::text));
   if (select count(*) from public.watchlist where user_id = new.user_id) >= 80 then
     raise exception 'watchlist limit reached (80)';
   end if;
