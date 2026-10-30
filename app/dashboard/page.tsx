@@ -92,8 +92,7 @@ export default async function Dashboard() {
 
       {rows.length > 0 && !haveSignals && (
         <p className="mt-3 text-sm text-zinc-500">
-          Signals populate after the first refresh (hourly cron, or GET{" "}
-          <code className="rounded bg-zinc-100 px-1">/api/refresh?secret=…</code>).
+          Signals populate after the first refresh (runs hourly; see SETUP.md to trigger one now).
         </p>
       )}
     </div>

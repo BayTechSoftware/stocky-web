@@ -26,7 +26,8 @@ npm install
 npm run dev                       # http://localhost:3000
 ```
 - Create an account, add a few tickers.
-- Populate signals once: `curl "http://localhost:3000/api/refresh?secret=YOUR_CRON_SECRET"`,
+- Populate signals once (the secret goes in the header, not the URL):
+  `curl -H "Authorization: Bearer YOUR_CRON_SECRET" http://localhost:3000/api/refresh`,
   then reload the dashboard.
 
 ## 4. Vercel (deploy + hourly refresh)

@@ -18,6 +18,21 @@ create policy "watchlist owner read"   on public.watchlist for select using (aut
 create policy "watchlist owner insert" on public.watchlist for insert with check (auth.uid() = user_id);
 create policy "watchlist owner delete" on public.watchlist for delete using (auth.uid() = user_id);
 
+-- Cap watchlist size per user (defense-in-depth; the server action also checks).
+-- Protects the shared market-data budget from one account adding thousands of names.
+create or replace function public.enforce_watchlist_cap()
+returns trigger language plpgsql as $$
+begin
+  if (select count(*) from public.watchlist where user_id = new.user_id) >= 80 then
+    raise exception 'watchlist limit reached (80)';
+  end if;
+  return new;
+end;
+$$;
+drop trigger if exists watchlist_cap on public.watchlist;
+create trigger watchlist_cap before insert on public.watchlist
+  for each row execute function public.enforce_watchlist_cap();
+
 -- 2) Latest computed signal per symbol (global; written by the cron job) ------
 create table if not exists public.symbol_signals (
   symbol      text primary key,

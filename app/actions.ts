@@ -4,6 +4,8 @@ import { createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
+const MAX_WATCHLIST = 80; // per-user cap (also enforced by a DB trigger)
+
 function cleanSymbol(raw: string): string {
   return raw.trim().toUpperCase().replace(/[^A-Z0-9.\-]/g, "").slice(0, 16);
 }
@@ -16,6 +18,12 @@ export async function addSymbol(formData: FormData) {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return;
+  // Cap the watchlist so one account can't exhaust the shared data-feed budget.
+  const { count } = await supabase
+    .from("watchlist")
+    .select("*", { count: "exact", head: true })
+    .eq("user_id", user.id);
+  if ((count ?? 0) >= MAX_WATCHLIST) return;
   await supabase.from("watchlist").insert({ user_id: user.id, symbol });
   revalidatePath("/dashboard");
 }

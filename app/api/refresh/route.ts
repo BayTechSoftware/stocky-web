@@ -1,9 +1,19 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { timingSafeEqual } from "node:crypto";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { fetchDailyClosesBatch } from "@/lib/twelvedata";
 import { assess } from "@/lib/signals";
 
 export const maxDuration = 300;
+
+const MAX_SYMBOLS_PER_RUN = 150; // bound credits/time even if the DB grows
+
+/** Constant-time string compare (avoids leaking the secret via timing). */
+function safeEqual(a: string, b: string): boolean {
+  const ab = Buffer.from(a);
+  const bb = Buffer.from(b);
+  return ab.length === bb.length && timingSafeEqual(ab, bb);
+}
 
 /**
  * Scheduled refresh: for every symbol in any user's watchlist, pull daily
@@ -17,10 +27,13 @@ export const maxDuration = 300;
  * pass `?secret=...`.
  */
 export async function GET(req: NextRequest) {
+  // Fail closed: no secret configured → refuse (never run unauthenticated).
   const secret = process.env.CRON_SECRET;
-  const auth = req.headers.get("authorization");
-  const qs = req.nextUrl.searchParams.get("secret");
-  if (secret && auth !== `Bearer ${secret}` && qs !== secret) {
+  if (!secret) {
+    return NextResponse.json({ error: "server not configured (CRON_SECRET)" }, { status: 500 });
+  }
+  const auth = req.headers.get("authorization") ?? "";
+  if (!safeEqual(auth, `Bearer ${secret}`)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
@@ -31,7 +44,9 @@ export async function GET(req: NextRequest) {
   const { data: rows, error } = await admin.from("watchlist").select("symbol");
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  const symbols = Array.from(new Set((rows ?? []).map((r) => r.symbol as string))).sort();
+  const symbols = Array.from(new Set((rows ?? []).map((r) => r.symbol as string)))
+    .sort()
+    .slice(0, MAX_SYMBOLS_PER_RUN);
   if (symbols.length === 0) return NextResponse.json({ updated: 0, note: "no symbols" });
 
   const today = new Date().toISOString().slice(0, 10);
