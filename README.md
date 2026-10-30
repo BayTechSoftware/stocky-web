@@ -1,36 +1,40 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Stocky Watcher (web)
 
-## Getting Started
+Companion web app to the **Stocky** ESP32 device — a stock **watcher** with
+buy/sell signals. Inspired by Portfolio Radar; built as its own small, focused app.
 
-First, run the development server:
+**Stack:** Next.js (App Router, TypeScript) · Tailwind · Supabase (Postgres + Auth)
+· Twelve Data (market data) · Vercel (host + Cron).
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+## What v1 does
+Log in → your watchlist of ~50–80 symbols, each scored with a buy/sell signal,
+refreshed on a schedule:
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+- **Signal engine** (`lib/signals.ts`, pure + unit-tested): RSI(14), 50/200-day
+  MAs, a Fibonacci-retracement **buy-zone band**, and a **BUY / WASHOUT / WATCH /
+  OVERBOUGHT** assessment + 0–100 score. Thresholds are named constants — easy to tune.
+- **Dashboard:** watchlist table (price · zone · RSI · signal · score), filters,
+  a "buy signals today" panel, and a "since yesterday" change-log.
+- **Refresh pipeline:** Vercel Cron → `/api/refresh` → Twelve Data (candles once/day,
+  quotes periodically) → compute → upsert to Supabase → write a daily history row.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+**Not in v1** (roadmap): positions/P&L · candidate screener · Congress/insider/13D ·
+news + daily AI note · the device tie-in (push signals to the Stocky screen).
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Status
+- ✅ Project scaffolded; **signal engine done + tested** (`npm test`, 13/13).
+- ✅ Twelve Data client, Supabase schema, env template.
+- ⏳ Next: auth + dashboard pages + the `/api/refresh` cron route (needs the accounts below).
 
-## Learn More
+## Setup
+1. **Accounts** (create these — they can't be scripted):
+   - **Twelve Data** → free API key.
+   - **Supabase** → new project; note the URL + anon key + service-role key.
+2. `cp .env.example .env.local` and fill in the keys.
+3. In Supabase → SQL editor, run `supabase/schema.sql`.
+4. `npm install` then `npm run dev` (http://localhost:3000).
 
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Scripts
+- `npm run dev` — local dev server
+- `npm run build` — production build
+- `npm test` — run the signal-engine unit tests (vitest)
