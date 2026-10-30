@@ -33,6 +33,41 @@ export async function fetchDailyCloses(
   return values.map((v) => parseFloat(v.close)).filter((n) => Number.isFinite(n));
 }
 
+/**
+ * Daily closes for several symbols in one request (1 request, N credits).
+ * Returns a map symbol → closes (oldest→newest); symbols that errored are omitted.
+ */
+export async function fetchDailyClosesBatch(
+  symbols: string[],
+  apiKey: string,
+  outputsize = 252
+): Promise<Record<string, number[]>> {
+  if (symbols.length === 0) return {};
+  const url =
+    `${BASE}/time_series?symbol=${symbols.map(encodeURIComponent).join(",")}` +
+    `&interval=1day&outputsize=${outputsize}&order=ASC&apikey=${apiKey}`;
+  const res = await fetch(url, { cache: "no-store" });
+  const json: unknown = await res.json();
+  if (isTDError(json)) throw new Error(`TwelveData batch: ${json.message}`);
+  const closesOf = (entry: unknown): number[] | null => {
+    const values = (entry as { values?: Array<{ close: string }> })?.values;
+    if (!Array.isArray(values)) return null;
+    return values.map((v) => parseFloat(v.close)).filter((n) => Number.isFinite(n));
+  };
+  const out: Record<string, number[]> = {};
+  if (symbols.length === 1) {
+    const c = closesOf(json);
+    if (c) out[symbols[0]] = c;
+  } else {
+    const map = json as Record<string, unknown>;
+    for (const sym of symbols) {
+      const c = closesOf(map[sym]);
+      if (c) out[sym] = c;
+    }
+  }
+  return out;
+}
+
 export interface Quote {
   price: number;
   changePct: number | null;
