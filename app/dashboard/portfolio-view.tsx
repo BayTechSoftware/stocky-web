@@ -1,12 +1,14 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import {
   addTicker,
   addLot,
   removeLot,
   setAlerts,
   removeSymbol,
+  refreshSignals,
   signOut,
 } from "../actions";
 import {
@@ -239,6 +241,26 @@ export default function PortfolioView({
   const [filter, setFilter] = useState<string>("ALL");
   const [open, setOpen] = useState<string | null>(null);
   const [showDevice, setShowDevice] = useState(false);
+  const [refreshMsg, setRefreshMsg] = useState<string | null>(null);
+  const [refreshing, startRefresh] = useTransition();
+  const router = useRouter();
+
+  function doRefresh() {
+    setRefreshMsg(null);
+    startRefresh(async () => {
+      const r = await refreshSignals();
+      if ("error" in r) {
+        setRefreshMsg(r.error);
+      } else if (r.total === 0) {
+        setRefreshMsg("Nothing to refresh yet.");
+      } else {
+        const more = r.total > r.refreshed ? ` · ${r.total - r.refreshed} more — click again` : "";
+        setRefreshMsg(`Refreshed ${r.updated}/${r.refreshed}${more}`);
+      }
+      router.refresh(); // pull the recomputed signals into the view
+      setTimeout(() => setRefreshMsg(null), 6000);
+    });
+  }
 
   const enriched = useMemo(
     () =>
@@ -304,12 +326,24 @@ export default function PortfolioView({
               <p className="mt-1 text-xs text-dim">{email}</p>
             </div>
           </div>
-          <form action={signOut}>
-            <button className="rounded-lg border border-border bg-surface px-3 py-1.5 text-sm text-dim hover:bg-surface2 hover:text-text">
-              Sign out
+          <div className="flex items-center gap-2">
+            <button
+              onClick={doRefresh}
+              disabled={refreshing}
+              title="Recompute signals for your watchlist (stalest first)"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-surface px-3 py-1.5 text-sm text-dim hover:bg-surface2 hover:text-text disabled:opacity-60"
+            >
+              <span className={refreshing ? "inline-block animate-spin" : ""}>↻</span>
+              {refreshing ? "Refreshing…" : "Refresh"}
             </button>
-          </form>
+            <form action={signOut}>
+              <button className="rounded-lg border border-border bg-surface px-3 py-1.5 text-sm text-dim hover:bg-surface2 hover:text-text">
+                Sign out
+              </button>
+            </form>
+          </div>
         </div>
+        {refreshMsg && <p className="mt-2 text-right text-xs text-dim">{refreshMsg}</p>}
 
         <div className="mt-7 flex flex-wrap items-end gap-x-10 gap-y-5 border-b border-border pb-7">
           <div>

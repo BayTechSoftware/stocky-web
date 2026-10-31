@@ -1,8 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { timingSafeEqual } from "node:crypto";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { fetchDailyClosesBatch } from "@/lib/twelvedata";
-import { assess } from "@/lib/signals";
+import { computeSignalsForSymbols } from "@/lib/refresh";
 
 export const maxDuration = 300;
 
@@ -69,53 +68,13 @@ export async function GET(req: NextRequest) {
     .sort((a, b) => (lastUpdated.get(a) ?? "").localeCompare(lastUpdated.get(b) ?? ""))
     .slice(0, MAX_SYMBOLS_PER_RUN);
 
-  const today = new Date().toISOString().slice(0, 10);
-  const nowIso = new Date().toISOString();
   const CHUNK = 8; // conservative batch size for the free tier (tune with the real key)
   let updated = 0;
 
   for (let i = 0; i < symbols.length; i += CHUNK) {
     const chunk = symbols.slice(i, i + CHUNK);
-    let closesMap: Record<string, number[]> = {};
-    try {
-      closesMap = await fetchDailyClosesBatch(chunk, apiKey);
-    } catch (e) {
-      errors.push(String(e));
-    }
-
-    const sigRows = [];
-    const stubRows: { symbol: string; updated_at: string }[] = [];
-    const histRows = [];
-    for (const sym of chunk) {
-      const closes = closesMap[sym];
-      if (!closes || closes.length < 15) {
-        // Record the attempt so a failing/unknown ticker rotates to the BACK of
-        // the staleness queue (its last-good signal, if any, is preserved).
-        stubRows.push({ symbol: sym, updated_at: nowIso });
-        continue;
-      }
-      const s = assess({ closes });
-      sigRows.push({
-        symbol: sym,
-        price: s.price,
-        prev_close: closes.length >= 2 ? closes[closes.length - 2] : null,
-        zone_low: s.zoneLow,
-        zone_high: s.zoneHigh,
-        rsi: s.rsi,
-        ma50: s.ma50,
-        ma200: s.ma200,
-        trend_up: s.trendUp,
-        assessment: s.assessment,
-        tag: s.tag,
-        score: s.score,
-        updated_at: nowIso,
-      });
-      histRows.push({ symbol: sym, as_of: today, assessment: s.assessment, score: s.score });
-      updated++;
-    }
-    if (sigRows.length) await admin.from("symbol_signals").upsert(sigRows);
-    if (stubRows.length) await admin.from("symbol_signals").upsert(stubRows); // bump last-attempt
-    if (histRows.length) await admin.from("signal_history").upsert(histRows);
+    const { updated: n } = await computeSignalsForSymbols(chunk, apiKey, admin);
+    updated += n;
 
     // Free tier = 8 credits/minute, and each 8-symbol batch spends 8 credits, so
     // wait a full minute (+margin) before the next batch or Twelve Data 429s the rest.

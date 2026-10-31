@@ -1,10 +1,28 @@
 "use server";
 
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
+import { computeSignalsForSymbols } from "@/lib/refresh";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { randomBytes, createHash } from "node:crypto";
 import type { Lot } from "@/lib/portfolio";
+
+/** One Twelve Data request stays within the free-tier 8-credits/minute budget. */
+const REFRESH_BATCH = 8;
+
+/** Compute a signal for one symbol right away (best-effort; never blocks the UI
+ *  on failure). Used when a ticker is first added so its metrics aren't blank
+ *  until the next daily cron run. */
+async function refreshOne(symbol: string) {
+  const apiKey = process.env.TWELVE_DATA_API_KEY;
+  if (!apiKey) return;
+  try {
+    await computeSignalsForSymbols([symbol], apiKey, createAdminClient());
+  } catch {
+    /* leave it for the manual Refresh button / daily cron */
+  }
+}
 
 const MAX_WATCHLIST = 80; // per-user cap (also enforced by a DB trigger)
 const MAX_DEVICE_TOKENS = 5; // per-user cap on paired devices
@@ -32,10 +50,47 @@ export async function addTicker(formData: FormData) {
     .select("*", { count: "exact", head: true })
     .eq("user_id", user.id);
   if ((count ?? 0) >= MAX_WATCHLIST) return;
-  await supabase
+  const { error } = await supabase
     .from("watchlist")
     .insert({ user_id: user.id, symbol, watch_only: true, lots: [] });
+  if (error) return;
+  await refreshOne(symbol); // populate its metrics now, not on the next daily cron
   revalidatePath("/dashboard");
+}
+
+/**
+ * Manually recompute signals for the signed-in user's watchlist, stalest first.
+ * One batch (<= REFRESH_BATCH symbols) per call so it stays inside the free-tier
+ * 8-credits/minute budget and returns fast; `total` vs `refreshed` lets the UI
+ * say whether another click would cover more. Scoped to the user's own symbols.
+ */
+export async function refreshSignals(): Promise<
+  { updated: number; refreshed: number; total: number } | { error: string }
+> {
+  const { supabase, user } = await uid();
+  if (!user) return { error: "not signed in" };
+  const apiKey = process.env.TWELVE_DATA_API_KEY;
+  if (!apiKey) return { error: "market data not configured" };
+
+  const { data: wl } = await supabase.from("watchlist").select("symbol").eq("user_id", user.id);
+  const symbols = Array.from(new Set((wl ?? []).map((r) => r.symbol as string)));
+  if (symbols.length === 0) return { updated: 0, refreshed: 0, total: 0 };
+
+  const admin = createAdminClient();
+  // Stalest first (by last signal update) so repeated clicks rotate coverage.
+  const { data: meta } = await admin
+    .from("symbol_signals")
+    .select("symbol, updated_at")
+    .in("symbol", symbols);
+  const last = new Map((meta ?? []).map((m) => [m.symbol as string, (m.updated_at as string) ?? ""]));
+  const ordered = symbols
+    .slice()
+    .sort((a, b) => (last.get(a) ?? "").localeCompare(last.get(b) ?? ""));
+  const batch = ordered.slice(0, REFRESH_BATCH);
+
+  const { updated } = await computeSignalsForSymbols(batch, apiKey, admin);
+  revalidatePath("/dashboard");
+  return { updated, refreshed: batch.length, total: symbols.length };
 }
 
 export async function removeSymbol(formData: FormData) {
