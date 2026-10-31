@@ -1,30 +1,30 @@
 @import "tailwindcss";
 
 @theme {
-  /* palette — refined dark "fintech terminal" */
-  --color-bg: #0a0b0f;
-  --color-surface: #13161c;
-  --color-surface2: #1b1f28;
-  --color-border: #262b35;
-  --color-text: #e9ebef;
-  --color-dim: #888e9c;
-  --color-faint: #565c69;
-  --color-gain: #2fd38a;
-  --color-loss: #ff5d6c;
-  --color-buy: #2fd38a;
-  --color-washout: #5b8def;
-  --color-watch: #f5b63d;
-  --color-overbought: #ff7a52;
-  --color-accent: #d9b56b; /* muted gold */
+  /* palette — clean & light "private banking" (Mercury / Ramp family) */
+  --color-bg: #f6f6f3;        /* warm paper */
+  --color-surface: #ffffff;   /* cards */
+  --color-surface2: #efefea;  /* hover / subtle fill */
+  --color-border: #e5e5df;    /* hairline */
+  --color-text: #1b1a17;      /* near-black, warm */
+  --color-dim: #6c6b64;       /* secondary text */
+  --color-faint: #9c9b92;     /* labels / tertiary */
+  --color-gain: #0a7c42;      /* deep green */
+  --color-loss: #cf2f2f;      /* deep red */
+  --color-buy: #0a7c42;
+  --color-washout: #2563eb;   /* blue */
+  --color-watch: #b07403;     /* amber */
+  --color-overbought: #d2582a;/* burnt orange */
+  --color-accent: #1b1a17;    /* near-black primary */
 
   /* fonts (next/font sets the source vars on <html>) */
-  --font-display: var(--font-fraunces), Georgia, "Times New Roman", serif;
+  --font-display: var(--font-schibsted), ui-sans-serif, system-ui, sans-serif;
   --font-sans: var(--font-hanken), ui-sans-serif, system-ui, sans-serif;
   --font-mono: var(--font-jb), ui-monospace, "SF Mono", monospace;
 }
 
 :root {
-  color-scheme: dark;
+  color-scheme: light;
 }
 
 html,
@@ -38,15 +38,22 @@ body {
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
   min-height: 100%;
-  /* soft atmospheric glow so it isn't a flat slab */
+  /* whisper-faint cool tint top-right so white cards float, not a flat slab */
   background-image:
-    radial-gradient(1100px 560px at 108% -12%, rgba(217, 181, 107, 0.06), transparent 62%),
-    radial-gradient(820px 480px at -12% 112%, rgba(91, 141, 239, 0.05), transparent 60%);
+    radial-gradient(1200px 620px at 112% -10%, rgba(37, 99, 235, 0.035), transparent 60%),
+    radial-gradient(900px 520px at -10% 110%, rgba(10, 124, 66, 0.03), transparent 58%);
   background-attachment: fixed;
 }
 
 .tnum {
   font-variant-numeric: tabular-nums;
+}
+
+/* soft card lift used on the main table / panels */
+.card {
+  box-shadow:
+    0 1px 2px rgba(27, 26, 23, 0.04),
+    0 8px 24px -16px rgba(27, 26, 23, 0.12);
 }
 
 /* thin, quiet scrollbars */

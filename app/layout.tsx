@@ -1,12 +1,11 @@
 import type { Metadata } from "next";
-import { Fraunces, Hanken_Grotesk, JetBrains_Mono } from "next/font/google";
+import { Schibsted_Grotesk, Hanken_Grotesk, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 
-const fraunces = Fraunces({
-  variable: "--font-fraunces",
+const schibsted = Schibsted_Grotesk({
+  variable: "--font-schibsted",
   subsets: ["latin"],
-  weight: ["400", "500", "600"],
-  style: ["normal", "italic"],
+  weight: ["400", "500", "600", "700", "800"],
 });
 const hanken = Hanken_Grotesk({
   variable: "--font-hanken",
@@ -28,7 +27,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html
       lang="en"
-      className={`${fraunces.variable} ${hanken.variable} ${jb.variable} h-full antialiased`}
+      className={`${schibsted.variable} ${hanken.variable} ${jb.variable} h-full antialiased`}
     >
       <body className="min-h-full">{children}</body>
     </html>

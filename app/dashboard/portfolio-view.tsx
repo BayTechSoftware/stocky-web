@@ -61,7 +61,7 @@ function col(v: number | null | undefined) {
 function SignalChip({ sig, withScore = true }: { sig: Sig | null; withScore?: boolean }) {
   if (!sig?.assessment)
     return <span className="text-xs text-faint">awaiting</span>;
-  const m = SIGMETA[sig.assessment] ?? { fg: "text-dim", chip: "bg-white/5 text-dim ring-white/10" };
+  const m = SIGMETA[sig.assessment] ?? { fg: "text-dim", chip: "bg-black/5 text-dim ring-black/10" };
   return (
     <span className="inline-flex items-center gap-1.5">
       <span
@@ -82,7 +82,7 @@ function Detail({ r }: { r: Row }) {
   const lots = (r.lots ?? []) as Lot[];
   const sig = r.sig;
   return (
-    <div className="grid gap-5 border-t border-border bg-bg/40 px-4 py-4 md:grid-cols-3 md:px-6">
+    <div className="grid gap-5 border-t border-border bg-surface2/50 px-4 py-4 md:grid-cols-3 md:px-6">
       {/* lots / buys */}
       <div>
         <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-faint">
@@ -295,14 +295,17 @@ export default function PortfolioView({
       <header className="pt-8">
         <div className="flex items-start justify-between gap-4">
           <div className="flex items-center gap-2.5">
-            <span className="mt-0.5 h-2.5 w-2.5 rounded-full bg-accent shadow-[0_0_12px_2px_rgba(217,181,107,0.5)]" />
+            <span className="relative mt-0.5 flex h-2.5 w-2.5">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-gain/50" />
+              <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-gain" />
+            </span>
             <div>
-              <h1 className="font-display text-3xl leading-none tracking-tight text-text">Stocky</h1>
+              <h1 className="font-display text-3xl font-bold leading-none tracking-tight text-text">Stocky</h1>
               <p className="mt-1 text-xs text-dim">{email}</p>
             </div>
           </div>
           <form action={signOut}>
-            <button className="rounded-lg border border-border px-3 py-1.5 text-sm text-dim hover:bg-surface hover:text-text">
+            <button className="rounded-lg border border-border bg-surface px-3 py-1.5 text-sm text-dim hover:bg-surface2 hover:text-text">
               Sign out
             </button>
           </form>
@@ -313,7 +316,7 @@ export default function PortfolioView({
             <div className="text-[11px] font-semibold uppercase tracking-wider text-faint">
               Portfolio value
             </div>
-            <div className="mt-1 font-display text-5xl tracking-tight text-text tnum md:text-6xl">
+            <div className="mt-1 font-display text-5xl font-semibold tracking-tight text-text tnum md:text-6xl">
               {money(totals.value)}
             </div>
           </div>
@@ -333,7 +336,7 @@ export default function PortfolioView({
             <div className="text-[11px] font-semibold uppercase tracking-wider text-faint">
               Holdings
             </div>
-            <div className="mt-1 font-display text-2xl text-text tnum">{totals.count}</div>
+            <div className="mt-1 font-display text-2xl font-semibold text-text tnum">{totals.count}</div>
           </div>
         </div>
       </header>
@@ -352,7 +355,7 @@ export default function PortfolioView({
 
       {/* ---------- HOLDINGS ---------- */}
       {tab === "holdings" && (
-        <section className="mt-3 overflow-hidden rounded-2xl border border-border bg-surface/60">
+        <section className="card mt-3 overflow-hidden rounded-2xl border border-border bg-surface">
           <RowHead
             tmpl="md:grid-cols-[1.1fr_1.3fr_1fr_1fr_1.1fr_1.4fr]"
             cols={["Symbol", "Shares · Cost", "Price", "Mkt value", "P&L", "Signal"]}
@@ -423,7 +426,7 @@ export default function PortfolioView({
             </form>
           </div>
 
-          <div className="overflow-hidden rounded-2xl border border-border bg-surface/60">
+          <div className="card overflow-hidden rounded-2xl border border-border bg-surface">
             <RowHead
               tmpl="md:grid-cols-[1.1fr_1fr_1.5fr_0.7fr_1.3fr_1fr]"
               cols={["Symbol", "Price", "Signal", "RSI", "Buy zone", "Position"]}
@@ -500,7 +503,7 @@ function HeroStat({
   return (
     <div>
       <div className="text-[11px] font-semibold uppercase tracking-wider text-faint">{label}</div>
-      <div className={`mt-1 font-display text-2xl tnum ${col(tone)}`}>{main}</div>
+      <div className={`mt-1 font-display text-2xl font-semibold tnum ${col(tone)}`}>{main}</div>
       <div className={`font-mono text-xs tnum ${col(tone)}`}>{sub}</div>
     </div>
   );
