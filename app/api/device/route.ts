@@ -27,22 +27,43 @@ type DeviceHolding = {
   alert_above?: number;
   alert_below?: number;
 };
-export async function GET(req: NextRequest) {
+
+// Mirrors the DB check constraint and the dashboard's MAX_WATCHLIST cap.
+const SYMBOL_RE = /^[A-Z0-9][A-Z0-9.\-]{0,15}$/;
+const MAX_WATCHLIST = 80;
+
+type DeviceToken = { id: string; user_id: string };
+type Admin = ReturnType<typeof createAdminClient>;
+
+/**
+ * Resolve the `Authorization: Bearer stk_...` header to a device token row.
+ * Returns either the token (id + user_id) or a ready-to-send error response.
+ */
+async function authDevice(
+  req: NextRequest,
+  admin: Admin
+): Promise<{ tok: DeviceToken } | { error: NextResponse }> {
   const auth = req.headers.get("authorization") ?? "";
   const m = auth.match(/^Bearer\s+(.+)$/i);
   const raw = m?.[1]?.trim();
-  if (!raw) return NextResponse.json({ error: "missing bearer token" }, { status: 401 });
+  if (!raw) return { error: NextResponse.json({ error: "missing bearer token" }, { status: 401 }) };
 
   const hash = createHash("sha256").update(raw).digest("hex");
-  const admin = createAdminClient();
-
-  const { data: tok, error: tokErr } = await admin
+  const { data: tok, error } = await admin
     .from("device_tokens")
     .select("id, user_id")
     .eq("token_hash", hash)
     .maybeSingle();
-  if (tokErr) return NextResponse.json({ error: tokErr.message }, { status: 500 });
-  if (!tok) return NextResponse.json({ error: "invalid token" }, { status: 401 });
+  if (error) return { error: NextResponse.json({ error: error.message }, { status: 500 }) };
+  if (!tok) return { error: NextResponse.json({ error: "invalid token" }, { status: 401 }) };
+  return { tok: tok as DeviceToken };
+}
+
+export async function GET(req: NextRequest) {
+  const admin = createAdminClient();
+  const a = await authDevice(req, admin);
+  if ("error" in a) return a.error;
+  const tok = a.tok;
 
   const { data: wl } = await admin
     .from("watchlist")
@@ -100,4 +121,103 @@ export async function GET(req: NextRequest) {
     signals,
     holdings,
   });
+}
+
+/**
+ * Device -> web push (Phase 4b). The device PUTs its current portfolio (the body
+ * config_to_json produces; we read only its `holdings` array) and we make the
+ * user's watchlist match it: a full replace, so symbols removed on the device are
+ * removed here too — symmetric with the GET pull.
+ *
+ * Safety: an empty or all-invalid holdings list is rejected (never wipe the cloud
+ * watchlist from a truncated push). Upsert runs first and is atomic, so a failed
+ * write never deletes anything; removals happen only after the upsert succeeds.
+ */
+export async function PUT(req: NextRequest) {
+  const admin = createAdminClient();
+  const a = await authDevice(req, admin);
+  if ("error" in a) return a.error;
+  const tok = a.tok;
+
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: "bad json" }, { status: 400 });
+  }
+  const rawHoldings = (body as { holdings?: unknown })?.holdings;
+  if (!Array.isArray(rawHoldings)) {
+    return NextResponse.json({ error: "holdings array required" }, { status: 400 });
+  }
+
+  // Validate + normalize into watchlist rows, de-duped by symbol (last wins).
+  type Row = {
+    user_id: string;
+    symbol: string;
+    watch_only: boolean;
+    alert_above: number | null;
+    alert_below: number | null;
+    lots: Lot[];
+  };
+  const bySymbol = new Map<string, Row>();
+  for (const h of rawHoldings as Record<string, unknown>[]) {
+    const symbol = String(h?.symbol ?? "").trim().toUpperCase();
+    if (!SYMBOL_RE.test(symbol)) continue;
+
+    const rawLots = Array.isArray(h?.lots) ? (h.lots as Record<string, unknown>[]) : [];
+    const lots: Lot[] = rawLots
+      .map((l) => {
+        const lot: Lot = { qty: Number(l?.qty) || 0, price: Number(l?.price) || 0 };
+        const d = Number(l?.date);
+        if (Number.isFinite(d) && d > 0) lot.date = d;
+        return lot;
+      })
+      .filter((l) => l.qty !== 0 || l.price !== 0); // drop blank lots
+
+    const above = Number(h?.alert_above);
+    const below = Number(h?.alert_below);
+    bySymbol.set(symbol, {
+      user_id: tok.user_id,
+      symbol,
+      watch_only: Boolean(h?.watch_only) || lots.length === 0,
+      alert_above: Number.isFinite(above) ? above : null,
+      alert_below: Number.isFinite(below) ? below : null,
+      lots,
+    });
+  }
+
+  const rows = [...bySymbol.values()];
+  if (rows.length === 0) {
+    return NextResponse.json(
+      { error: "no valid holdings — refusing to clear the watchlist" },
+      { status: 400 }
+    );
+  }
+  if (rows.length > MAX_WATCHLIST) {
+    return NextResponse.json({ error: `too many holdings (max ${MAX_WATCHLIST})` }, { status: 400 });
+  }
+
+  // Upsert first — one atomic statement, so a failure deletes nothing.
+  const { error: upErr } = await admin
+    .from("watchlist")
+    .upsert(rows, { onConflict: "user_id,symbol" });
+  if (upErr) return NextResponse.json({ error: upErr.message }, { status: 500 });
+
+  // Then drop any of the user's symbols no longer present (completes the replace).
+  const keep = new Set(rows.map((r) => r.symbol));
+  const { data: existing } = await admin
+    .from("watchlist")
+    .select("symbol")
+    .eq("user_id", tok.user_id);
+  const toDelete = (existing ?? []).map((r) => r.symbol as string).filter((s) => !keep.has(s));
+  if (toDelete.length) {
+    await admin.from("watchlist").delete().eq("user_id", tok.user_id).in("symbol", toDelete);
+  }
+
+  await admin
+    .from("device_tokens")
+    .update({ last_used_at: new Date().toISOString() })
+    .eq("id", tok.id);
+
+  return NextResponse.json({ ok: true, count: rows.length, removed: toDelete.length });
 }
