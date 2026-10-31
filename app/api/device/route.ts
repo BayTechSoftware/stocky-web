@@ -11,8 +11,22 @@ export const maxDuration = 15;
  * (`Authorization: Bearer stk_...`); only its SHA-256 hash is stored server-side,
  * so a DB leak never exposes a usable token. Returns that user's watchlist
  * signals as compact JSON with short keys (s/p/a/t/sc) to keep on-device JSON
- * parsing cheap, sorted best-entry first.
+ * parsing cheap, sorted best-entry first, plus a `holdings` array in the exact
+ * shape the device's config_json parser reads (symbol / watch_only / lots /
+ * alert_above / alert_below). The web is the source of truth: the device mirrors
+ * this holdings list onto its screen on each poll.
  */
+
+type Lot = { qty: number; price: number; date?: number };
+
+/** A watchlist row as the device wants it (matches firmware core/config_json.c). */
+type DeviceHolding = {
+  symbol: string;
+  watch_only: boolean;
+  lots: Lot[];
+  alert_above?: number;
+  alert_below?: number;
+};
 export async function GET(req: NextRequest) {
   const auth = req.headers.get("authorization") ?? "";
   const m = auth.match(/^Bearer\s+(.+)$/i);
@@ -32,9 +46,30 @@ export async function GET(req: NextRequest) {
 
   const { data: wl } = await admin
     .from("watchlist")
-    .select("symbol")
+    .select("symbol, lots, watch_only, alert_above, alert_below")
     .eq("user_id", tok.user_id as string);
-  const symbols = (wl ?? []).map((r) => r.symbol as string);
+  const rows = wl ?? [];
+  const symbols = rows.map((r) => r.symbol as string);
+
+  // Holdings in the firmware config shape. Lots pass through as stored
+  // ({qty, price, date-epoch-seconds}); numbers are coerced defensively.
+  const holdings: DeviceHolding[] = rows.map((r) => {
+    const rawLots = Array.isArray(r.lots) ? (r.lots as Lot[]) : [];
+    const lots: Lot[] = rawLots.map((l) => {
+      const lot: Lot = { qty: Number(l?.qty) || 0, price: Number(l?.price) || 0 };
+      const d = Number(l?.date);
+      if (Number.isFinite(d) && d > 0) lot.date = d;
+      return lot;
+    });
+    const h: DeviceHolding = {
+      symbol: r.symbol as string,
+      watch_only: Boolean(r.watch_only),
+      lots,
+    };
+    if (r.alert_above != null) h.alert_above = Number(r.alert_above);
+    if (r.alert_below != null) h.alert_below = Number(r.alert_below);
+    return h;
+  });
 
   let signals: { s: string; p: number | null; a: string | null; t: string | null; sc: number | null }[] = [];
   if (symbols.length) {
@@ -59,5 +94,10 @@ export async function GET(req: NextRequest) {
     .update({ last_used_at: new Date().toISOString() })
     .eq("id", tok.id as string);
 
-  return NextResponse.json({ updated: new Date().toISOString(), count: signals.length, signals });
+  return NextResponse.json({
+    updated: new Date().toISOString(),
+    count: signals.length,
+    signals,
+    holdings,
+  });
 }
