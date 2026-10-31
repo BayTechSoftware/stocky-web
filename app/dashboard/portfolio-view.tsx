@@ -416,11 +416,11 @@ export default function PortfolioView({
                     {shares(st.qty)} @ ${fprice(st.avgCost)}
                   </div>
                 </div>
-                <div className="shrink-0 text-right">
+                <div className="shrink-0 space-y-0.5 text-right">
                   <div className="font-mono text-sm font-medium text-text tnum">{money(st.value)}</div>
-                  <div className={`font-mono text-sm tnum ${col(st.pnl)}`}>{moneySigned(st.pnl)}</div>
-                  <div className={`font-mono text-xs tnum ${col(st.pnlPct)}`}>
-                    {pct(st.pnlPct)} · ${r.sig?.price != null ? fprice(r.sig.price) : "—"}
+                  <div className={`font-mono text-xs tnum ${col(st.dayPct)}`}>{pct(st.dayPct)} today</div>
+                  <div className={`font-mono text-xs tnum ${col(st.pnl)}`}>
+                    {moneySigned(st.pnl)} · {pct(st.pnlPct)} all
                   </div>
                 </div>
               </button>
@@ -512,6 +512,7 @@ export default function PortfolioView({
                     <div className="font-mono text-sm text-text tnum">
                       {r.sig?.price != null ? `$${fprice(r.sig.price)}` : "—"}
                     </div>
+                    <div className={`font-mono text-xs tnum ${col(st.dayPct)}`}>{pct(st.dayPct)}</div>
                     <div className="mt-0.5 font-mono text-xs text-dim tnum">
                       {held ? `${shares(st.qty)} sh` : "watch"}
                       {r.sig?.rsi != null ? ` · RSI ${Math.round(r.sig.rsi)}` : ""}
@@ -525,9 +526,10 @@ export default function PortfolioView({
                 >
                   <Sym symbol={r.symbol} open={open === r.symbol} />
                   <Cell>
-                    <span className="font-mono text-sm text-text tnum">
+                    <div className="font-mono text-sm text-text tnum">
                       {r.sig?.price != null ? `$${fprice(r.sig.price)}` : "—"}
-                    </span>
+                    </div>
+                    <div className={`font-mono text-xs tnum ${col(st.dayPct)}`}>{pct(st.dayPct)}</div>
                   </Cell>
                   <Cell>
                     <SignalChip sig={r.sig} />
