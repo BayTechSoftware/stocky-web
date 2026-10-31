@@ -321,12 +321,12 @@ export default function PortfolioView({
               <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-gain/50" />
               <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-gain" />
             </span>
-            <div>
-              <h1 className="font-display text-3xl font-bold leading-none tracking-tight text-text">Stocky</h1>
-              <p className="mt-1 text-xs text-dim">{email}</p>
+            <div className="min-w-0">
+              <h1 className="font-display text-2xl font-bold leading-none tracking-tight text-text sm:text-3xl">Stocky</h1>
+              <p className="mt-1 truncate text-xs text-dim">{email}</p>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex shrink-0 items-center gap-2">
             <button
               onClick={doRefresh}
               disabled={refreshing}
@@ -345,32 +345,32 @@ export default function PortfolioView({
         </div>
         {refreshMsg && <p className="mt-2 text-right text-xs text-dim">{refreshMsg}</p>}
 
-        <div className="mt-7 flex flex-wrap items-end gap-x-10 gap-y-5 border-b border-border pb-7">
-          <div>
-            <div className="text-[11px] font-semibold uppercase tracking-wider text-faint">
-              Portfolio value
-            </div>
-            <div className="mt-1 font-display text-5xl font-semibold tracking-tight text-text tnum md:text-6xl">
-              {money(totals.value)}
-            </div>
+        <div className="mt-6 border-b border-border pb-6 md:mt-7 md:pb-7">
+          <div className="text-[11px] font-semibold uppercase tracking-wider text-faint">
+            Portfolio value
           </div>
-          <HeroStat
-            label="Unrealized P&amp;L"
-            main={moneySigned(totals.pnl)}
-            sub={pct(totals.pnlPct)}
-            tone={totals.pnl}
-          />
-          <HeroStat
-            label="Today"
-            main={moneySigned(totals.day)}
-            sub={pct(totals.dayPct)}
-            tone={totals.day}
-          />
-          <div>
-            <div className="text-[11px] font-semibold uppercase tracking-wider text-faint">
-              Holdings
+          <div className="mt-1 font-display text-4xl font-semibold tracking-tight text-text tnum sm:text-5xl md:text-6xl">
+            {money(totals.value)}
+          </div>
+          <div className="mt-5 grid grid-cols-2 gap-x-6 gap-y-5 md:flex md:flex-wrap md:items-end md:gap-x-10">
+            <HeroStat
+              label="Unrealized P&amp;L"
+              main={moneySigned(totals.pnl)}
+              sub={pct(totals.pnlPct)}
+              tone={totals.pnl}
+            />
+            <HeroStat
+              label="Today"
+              main={moneySigned(totals.day)}
+              sub={pct(totals.dayPct)}
+              tone={totals.day}
+            />
+            <div>
+              <div className="text-[11px] font-semibold uppercase tracking-wider text-faint">
+                Holdings
+              </div>
+              <div className="mt-1 font-display text-xl font-semibold text-text tnum md:text-2xl">{totals.count}</div>
             </div>
-            <div className="mt-1 font-display text-2xl font-semibold text-text tnum">{totals.count}</div>
           </div>
         </div>
       </header>
@@ -399,12 +399,38 @@ export default function PortfolioView({
           )}
           {holdings.map(({ r, st }) => (
             <div key={r.symbol} className="border-t border-border first:border-t-0">
+              {/* mobile card */}
               <button
                 onClick={() => toggle(r.symbol)}
-                className="grid w-full grid-cols-2 items-center gap-2 px-4 py-3.5 text-left hover:bg-surface2/40 md:grid-cols-[1.1fr_1.3fr_1fr_1fr_1.1fr_1.4fr] md:px-6"
+                className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left hover:bg-surface2/40 md:hidden"
+              >
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className={`text-faint transition ${open === r.symbol ? "rotate-90" : ""}`}>▸</span>
+                    <span className="font-display text-base font-semibold text-text">{r.symbol}</span>
+                  </div>
+                  <div className="mt-1.5">
+                    <SignalChip sig={r.sig} />
+                  </div>
+                  <div className="mt-1.5 font-mono text-xs text-faint tnum">
+                    {shares(st.qty)} @ ${fprice(st.avgCost)}
+                  </div>
+                </div>
+                <div className="shrink-0 text-right">
+                  <div className="font-mono text-sm font-medium text-text tnum">{money(st.value)}</div>
+                  <div className={`font-mono text-sm tnum ${col(st.pnl)}`}>{moneySigned(st.pnl)}</div>
+                  <div className={`font-mono text-xs tnum ${col(st.pnlPct)}`}>
+                    {pct(st.pnlPct)} · ${r.sig?.price != null ? fprice(r.sig.price) : "—"}
+                  </div>
+                </div>
+              </button>
+              {/* desktop grid */}
+              <button
+                onClick={() => toggle(r.symbol)}
+                className="hidden w-full grid-cols-[1.1fr_1.3fr_1fr_1fr_1.1fr_1.4fr] items-center gap-2 px-6 py-3.5 text-left hover:bg-surface2/40 md:grid"
               >
                 <Sym symbol={r.symbol} open={open === r.symbol} />
-                <Cell className="hidden md:block">
+                <Cell>
                   <span className="font-mono text-sm text-text tnum">{shares(st.qty)}</span>
                   <span className="ml-1 font-mono text-xs text-faint tnum">@ ${fprice(st.avgCost)}</span>
                 </Cell>
@@ -414,14 +440,14 @@ export default function PortfolioView({
                   </div>
                   <div className={`font-mono text-xs tnum ${col(st.dayPct)}`}>{pct(st.dayPct)}</div>
                 </Cell>
-                <Cell className="hidden md:block">
+                <Cell>
                   <span className="font-mono text-sm text-text tnum">{money(st.value)}</span>
                 </Cell>
-                <Cell className="text-right md:text-left">
+                <Cell>
                   <div className={`font-mono text-sm tnum ${col(st.pnl)}`}>{moneySigned(st.pnl)}</div>
                   <div className={`font-mono text-xs tnum ${col(st.pnlPct)}`}>{pct(st.pnlPct)}</div>
                 </Cell>
-                <Cell className="col-span-2 mt-1 md:col-span-1 md:mt-0">
+                <Cell>
                   <SignalChip sig={r.sig} />
                 </Cell>
               </button>
@@ -468,9 +494,34 @@ export default function PortfolioView({
             {watchRows.length === 0 && <Empty>Nothing here yet.</Empty>}
             {watchRows.map(({ r, st, held }) => (
               <div key={r.symbol} className="border-t border-border first:border-t-0">
+                {/* mobile card */}
                 <button
                   onClick={() => toggle(r.symbol)}
-                  className="grid w-full grid-cols-2 items-center gap-2 px-4 py-3.5 text-left hover:bg-surface2/40 md:grid-cols-[1.1fr_1fr_1.5fr_0.7fr_1.3fr_1fr] md:px-6"
+                  className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left hover:bg-surface2/40 md:hidden"
+                >
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className={`text-faint transition ${open === r.symbol ? "rotate-90" : ""}`}>▸</span>
+                      <span className="font-display text-base font-semibold text-text">{r.symbol}</span>
+                    </div>
+                    <div className="mt-1.5">
+                      <SignalChip sig={r.sig} />
+                    </div>
+                  </div>
+                  <div className="shrink-0 text-right">
+                    <div className="font-mono text-sm text-text tnum">
+                      {r.sig?.price != null ? `$${fprice(r.sig.price)}` : "—"}
+                    </div>
+                    <div className="mt-0.5 font-mono text-xs text-dim tnum">
+                      {held ? `${shares(st.qty)} sh` : "watch"}
+                      {r.sig?.rsi != null ? ` · RSI ${Math.round(r.sig.rsi)}` : ""}
+                    </div>
+                  </div>
+                </button>
+                {/* desktop grid */}
+                <button
+                  onClick={() => toggle(r.symbol)}
+                  className="hidden w-full grid-cols-[1.1fr_1fr_1.5fr_0.7fr_1.3fr_1fr] items-center gap-2 px-6 py-3.5 text-left hover:bg-surface2/40 md:grid"
                 >
                   <Sym symbol={r.symbol} open={open === r.symbol} />
                   <Cell>
@@ -478,22 +529,22 @@ export default function PortfolioView({
                       {r.sig?.price != null ? `$${fprice(r.sig.price)}` : "—"}
                     </span>
                   </Cell>
-                  <Cell className="col-span-2 md:col-span-1">
+                  <Cell>
                     <SignalChip sig={r.sig} />
                   </Cell>
-                  <Cell className="hidden md:block">
+                  <Cell>
                     <span className="font-mono text-sm text-dim tnum">
                       {r.sig?.rsi != null ? Math.round(r.sig.rsi) : "—"}
                     </span>
                   </Cell>
-                  <Cell className="hidden md:block">
+                  <Cell>
                     <span className="font-mono text-xs text-dim tnum">
                       {r.sig?.zone_low != null && r.sig?.zone_high != null
                         ? `$${fprice(r.sig.zone_low)}–$${fprice(r.sig.zone_high)}`
                         : "—"}
                     </span>
                   </Cell>
-                  <Cell className="text-right md:text-left">
+                  <Cell>
                     {held ? (
                       <span className="font-mono text-sm text-text tnum">{shares(st.qty)} sh</span>
                     ) : (
@@ -537,7 +588,7 @@ function HeroStat({
   return (
     <div>
       <div className="text-[11px] font-semibold uppercase tracking-wider text-faint">{label}</div>
-      <div className={`mt-1 font-display text-2xl font-semibold tnum ${col(tone)}`}>{main}</div>
+      <div className={`mt-1 font-display text-xl font-semibold tnum md:text-2xl ${col(tone)}`}>{main}</div>
       <div className={`font-mono text-xs tnum ${col(tone)}`}>{sub}</div>
     </div>
   );
