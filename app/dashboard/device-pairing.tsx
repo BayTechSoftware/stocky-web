@@ -14,6 +14,7 @@ export default function DevicePairing({ tokens }: { tokens: DeviceToken[] }) {
   const [fresh, setFresh] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [canWrite, setCanWrite] = useState(true);
   const [pending, start] = useTransition();
 
   const endpoint =
@@ -23,7 +24,7 @@ export default function DevicePairing({ tokens }: { tokens: DeviceToken[] }) {
     setErr(null);
     setFresh(null);
     start(async () => {
-      const res = await createDeviceToken();
+      const res = await createDeviceToken(canWrite);
       if ("token" in res) setFresh(res.token);
       else setErr(res.error);
     });
@@ -56,6 +57,16 @@ export default function DevicePairing({ tokens }: { tokens: DeviceToken[] }) {
           {pending ? "…" : "Generate token"}
         </button>
       </div>
+
+      <label className="mt-3 flex items-center gap-2 text-xs text-zinc-600">
+        <input
+          type="checkbox"
+          checked={canWrite}
+          onChange={(e) => setCanWrite(e.target.checked)}
+          className="h-3.5 w-3.5 accent-zinc-900"
+        />
+        Allow this device to edit my watchlist (two-way sync). Leave off for a read-only display.
+      </label>
 
       {err && <p className="mt-3 text-sm text-red-600">{err}</p>}
 

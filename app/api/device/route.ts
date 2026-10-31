@@ -32,12 +32,12 @@ type DeviceHolding = {
 const SYMBOL_RE = /^[A-Z0-9][A-Z0-9.\-]{0,15}$/;
 const MAX_WATCHLIST = 80;
 
-type DeviceToken = { id: string; user_id: string };
+type DeviceToken = { id: string; user_id: string; can_write: boolean };
 type Admin = ReturnType<typeof createAdminClient>;
 
 /**
  * Resolve the `Authorization: Bearer stk_...` header to a device token row.
- * Returns either the token (id + user_id) or a ready-to-send error response.
+ * Returns either the token (id + user_id + can_write) or a ready-to-send error.
  */
 async function authDevice(
   req: NextRequest,
@@ -51,7 +51,7 @@ async function authDevice(
   const hash = createHash("sha256").update(raw).digest("hex");
   const { data: tok, error } = await admin
     .from("device_tokens")
-    .select("id, user_id")
+    .select("id, user_id, can_write")
     .eq("token_hash", hash)
     .maybeSingle();
   if (error) return { error: NextResponse.json({ error: error.message }, { status: 500 }) };
@@ -68,7 +68,8 @@ export async function GET(req: NextRequest) {
   const { data: wl } = await admin
     .from("watchlist")
     .select("symbol, lots, watch_only, alert_above, alert_below")
-    .eq("user_id", tok.user_id as string);
+    .eq("user_id", tok.user_id as string)
+    .order("symbol"); // stable order so the device can detect real changes vs re-sends
   const rows = wl ?? [];
   const symbols = rows.map((r) => r.symbol as string);
 
@@ -138,6 +139,15 @@ export async function PUT(req: NextRequest) {
   const a = await authDevice(req, admin);
   if ("error" in a) return a.error;
   const tok = a.tok;
+
+  // Write scope is opt-in per token: a read-only device can't mutate the cloud
+  // watchlist even with a valid token (least privilege for a leaked token).
+  if (!tok.can_write) {
+    return NextResponse.json(
+      { error: "this device token is read-only (enable write access when pairing)" },
+      { status: 403 }
+    );
+  }
 
   let body: unknown;
   try {

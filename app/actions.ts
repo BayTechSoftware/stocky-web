@@ -136,7 +136,9 @@ export async function setAlerts(formData: FormData) {
  * Mint a device token so the Stocky hardware can read this user's signals.
  * Only the SHA-256 hash is stored; the raw token is returned once for display.
  */
-export async function createDeviceToken(): Promise<{ token: string } | { error: string }> {
+export async function createDeviceToken(
+  canWrite = false
+): Promise<{ token: string } | { error: string }> {
   const { supabase, user } = await uid();
   if (!user) return { error: "not signed in" };
   const { count } = await supabase
@@ -146,7 +148,11 @@ export async function createDeviceToken(): Promise<{ token: string } | { error: 
   if ((count ?? 0) >= MAX_DEVICE_TOKENS) return { error: `device limit reached (${MAX_DEVICE_TOKENS})` };
   const raw = "stk_" + randomBytes(24).toString("hex");
   const token_hash = createHash("sha256").update(raw).digest("hex");
-  const { error } = await supabase.from("device_tokens").insert({ user_id: user.id, token_hash });
+  // Write scope is opt-in: a read-only token can display signals/holdings but
+  // cannot push edits back to the watchlist.
+  const { error } = await supabase
+    .from("device_tokens")
+    .insert({ user_id: user.id, token_hash, can_write: canWrite });
   if (error) return { error: error.message };
   revalidatePath("/dashboard");
   return { token: raw };
