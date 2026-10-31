@@ -32,6 +32,11 @@ export interface Signal {
   zonePos: ZonePos;
   /** % above zoneHigh (+) or below zoneLow (−); 0 when in-zone. */
   pctFromZone: number;
+  /** 52-week (trailing ~1y) high and low from the daily closes. */
+  week52High: number;
+  week52Low: number;
+  /** Trailing ~1-year return %, first→last close in the window; null if too few closes. */
+  ret1y: number | null;
   assessment: Assessment;
   /** Human tag: SWEET / OK / OVERSOLD / EXPENSIVE / FALLING / NEAR. */
   tag: string;
@@ -126,6 +131,12 @@ export function assess(input: SignalInput): Signal {
   const trendUp = ma200 == null ? null : price >= ma200;
   const { low: zoneLow, high: zoneHigh } = buyZone(closes);
 
+  // 52-week range + 1y return from the same trailing-year window as the zone.
+  const win = closes.slice(-SWING_WINDOW);
+  const week52High = Math.max(...win);
+  const week52Low = Math.min(...win);
+  const ret1y = win.length >= 2 && win[0] > 0 ? ((price - win[0]) / win[0]) * 100 : null;
+
   let zonePos: ZonePos;
   let pctFromZone = 0;
   if (price < zoneLow) {
@@ -170,6 +181,9 @@ export function assess(input: SignalInput): Signal {
     zoneHigh,
     zonePos,
     pctFromZone,
+    week52High,
+    week52Low,
+    ret1y,
     assessment,
     tag,
     score: scoreOf(zonePos, pctFromZone, rr, trendUp),

@@ -20,7 +20,7 @@ export default async function Dashboard() {
     const { data } = await supabase
       .from("symbol_signals")
       .select(
-        "symbol, price, prev_close, rsi, ma50, ma200, trend_up, zone_low, zone_high, assessment, tag, score, updated_at"
+        "symbol, price, prev_close, rsi, ma50, ma200, trend_up, zone_low, zone_high, week52_high, week52_low, ret_1y, assessment, tag, score, updated_at"
       )
       .in("symbol", symbols);
     for (const s of data ?? []) sigBy.set(s.symbol as string, s as Sig);

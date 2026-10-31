@@ -32,6 +32,9 @@ export interface Sig {
   trend_up: boolean | null;
   zone_low: number | null;
   zone_high: number | null;
+  week52_high: number | null;
+  week52_low: number | null;
+  ret_1y: number | null;
   assessment: string | null;
   tag: string | null;
   score: number | null;
@@ -79,151 +82,292 @@ function SignalChip({ sig, withScore = true }: { sig: Sig | null; withScore?: bo
   );
 }
 
-/* ---- the expandable detail (shared by both tabs) ---- */
-function Detail({ r }: { r: Row }) {
-  const lots = (r.lots ?? []) as Lot[];
-  const sig = r.sig;
+/* ---- detail helpers ---- */
+const LABEL = "text-[10px] font-semibold uppercase tracking-wider text-faint";
+
+function fmtAgo(iso: string | null): string {
+  if (!iso) return "never";
+  const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
+  if (s < 90) return "just now";
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m} min ago`;
+  const h = Math.round(m / 60);
+  if (h < 48) return `${h} h ago`;
+  return `${Math.round(h / 24)} d ago`;
+}
+
+/** A labeled stat tile. `tone` (a signed number) colors the value gain/loss; omit for neutral. */
+function Tile({
+  label,
+  children,
+  tone,
+}: {
+  label: string;
+  children: React.ReactNode;
+  tone?: number | null;
+}) {
   return (
-    <div className="grid gap-5 border-t border-border bg-surface2/50 px-4 py-4 md:grid-cols-3 md:px-6">
-      {/* lots / buys */}
-      <div>
-        <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-faint">
-          Buys
-        </div>
-        {lots.length === 0 && <div className="text-sm text-dim">Watch-only — no position.</div>}
-        <ul className="space-y-1">
-          {lots.map((l, i) => (
-            <li key={i} className="flex items-center justify-between gap-3 text-sm">
-              <span className="font-mono tnum text-text">
-                {shares(l.qty)} <span className="text-faint">@</span> ${fprice(l.price)}
-              </span>
-              <span className="flex items-center gap-3">
-                <span className="font-mono text-xs text-dim tnum">
-                  {l.date ? new Date(l.date * 1000).toLocaleDateString() : "—"}
-                </span>
-                <form action={removeLot}>
-                  <input type="hidden" name="symbol" value={r.symbol} />
-                  <input type="hidden" name="index" value={i} />
-                  <button className="text-faint hover:text-loss" title="Remove buy" aria-label="Remove buy">
-                    ✕
-                  </button>
-                </form>
-              </span>
-            </li>
-          ))}
-        </ul>
-        {/* add a buy */}
-        <form action={addLot} className="mt-3 flex flex-wrap items-end gap-2">
-          <input type="hidden" name="symbol" value={r.symbol} />
-          <label className="flex flex-col text-[10px] uppercase tracking-wide text-faint">
-            Qty
-            <input
-              name="qty"
-              type="number"
-              step="any"
-              required
-              placeholder="0"
-              className="mt-0.5 w-20 rounded-md border border-border bg-surface px-2 py-1.5 font-mono text-sm text-text tnum outline-none focus:border-accent"
-            />
-          </label>
-          <label className="flex flex-col text-[10px] uppercase tracking-wide text-faint">
-            Price
-            <input
-              name="price"
-              type="number"
-              step="any"
-              required
-              placeholder="0.00"
-              className="mt-0.5 w-24 rounded-md border border-border bg-surface px-2 py-1.5 font-mono text-sm text-text tnum outline-none focus:border-accent"
-            />
-          </label>
-          <label className="flex flex-col text-[10px] uppercase tracking-wide text-faint">
-            Date
-            <input
-              name="date"
-              type="date"
-              className="mt-0.5 rounded-md border border-border bg-surface px-2 py-1.5 font-mono text-sm text-text outline-none focus:border-accent"
-            />
-          </label>
-          <button className="rounded-md bg-accent px-3 py-1.5 text-sm font-semibold text-bg hover:brightness-110">
-            + Add buy
-          </button>
-        </form>
-      </div>
-
-      {/* alerts */}
-      <div>
-        <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-faint">
-          Price alerts
-        </div>
-        <form action={setAlerts} className="flex flex-wrap items-end gap-2">
-          <input type="hidden" name="symbol" value={r.symbol} />
-          <label className="flex flex-col text-[10px] uppercase tracking-wide text-faint">
-            Below
-            <input
-              name="below"
-              type="number"
-              step="any"
-              defaultValue={r.alert_below ?? ""}
-              placeholder="—"
-              className="mt-0.5 w-24 rounded-md border border-border bg-surface px-2 py-1.5 font-mono text-sm text-text tnum outline-none focus:border-washout"
-            />
-          </label>
-          <label className="flex flex-col text-[10px] uppercase tracking-wide text-faint">
-            Above
-            <input
-              name="above"
-              type="number"
-              step="any"
-              defaultValue={r.alert_above ?? ""}
-              placeholder="—"
-              className="mt-0.5 w-24 rounded-md border border-border bg-surface px-2 py-1.5 font-mono text-sm text-text tnum outline-none focus:border-overbought"
-            />
-          </label>
-          <button className="rounded-md border border-border px-3 py-1.5 text-sm text-text hover:bg-surface2">
-            Save
-          </button>
-        </form>
-      </div>
-
-      {/* signal detail */}
-      <div>
-        <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-faint">
-          Signal
-        </div>
-        {sig?.assessment ? (
-          <dl className="space-y-1 text-sm">
-            <Stat k="Buy zone">
-              {sig.zone_low != null && sig.zone_high != null
-                ? `$${fprice(sig.zone_low)} – $${fprice(sig.zone_high)}`
-                : "—"}
-            </Stat>
-            <Stat k="RSI (14)">{sig.rsi != null ? Math.round(sig.rsi) : "—"}</Stat>
-            <Stat k="Trend">
-              {sig.trend_up == null ? "—" : sig.trend_up ? "↑ above 200-day" : "↓ below 200-day"}
-            </Stat>
-            <Stat k="MA 50 / 200">
-              {sig.ma50 != null && sig.ma200 != null
-                ? `$${fprice(sig.ma50)} / $${fprice(sig.ma200)}`
-                : "—"}
-            </Stat>
-          </dl>
-        ) : (
-          <div className="text-sm text-dim">No signal yet — refreshes daily.</div>
-        )}
-        <form action={removeSymbol} className="mt-4">
-          <input type="hidden" name="symbol" value={r.symbol} />
-          <button className="text-xs text-faint hover:text-loss">Remove {r.symbol} ✕</button>
-        </form>
+    <div className="rounded-lg border border-border bg-surface px-3 py-2">
+      <div className={LABEL}>{label}</div>
+      <div className={`mt-0.5 font-mono text-sm tnum ${tone === undefined ? "text-text" : col(tone)}`}>
+        {children}
       </div>
     </div>
   );
 }
-function Stat({ k, children }: { k: string; children: React.ReactNode }) {
+
+/** Horizontal range track with a marker at `cur` between `low` and `high`. */
+function RangeBar({ low, cur, high }: { low: number; cur: number; high: number }) {
+  const p = high > low ? Math.max(0, Math.min(100, ((cur - low) / (high - low)) * 100)) : 50;
   return (
-    <div className="flex items-center justify-between gap-4">
-      <dt className="text-dim">{k}</dt>
-      <dd className="font-mono tnum text-text">{children}</dd>
+    <div className="relative mt-1.5 h-1.5 rounded-full bg-black/10">
+      <div
+        className="absolute top-1/2 h-3.5 w-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-text ring-2 ring-surface"
+        style={{ left: `${p}%` }}
+      />
+    </div>
+  );
+}
+
+type ZonePos = "below" | "in" | "above" | null;
+function signalRead(sig: Sig, zonePos: ZonePos, rsiLabel: string): string {
+  const base: Record<string, string> = {
+    BUY: "Trading inside its value zone — a reasonable entry here.",
+    WASHOUT: "Sold off below the zone and oversold — deep-value, but possibly a falling knife.",
+    WATCH: "Not in the buy zone yet — wait for a better level.",
+    OVERBOUGHT: "Extended above the zone / overbought — expensive at this price.",
+  };
+  const z = zonePos ? ` It's ${zonePos === "in" ? "in" : zonePos} the buy zone.` : "";
+  return (base[sig.assessment ?? ""] ?? "") + (rsiLabel ? ` RSI reads ${rsiLabel}.` : "") + z;
+}
+
+/* ---- the expandable detail (shared by both tabs) ---- */
+function Detail({ r }: { r: Row }) {
+  const lots = (r.lots ?? []) as Lot[];
+  const sig = r.sig;
+  const st = holdingStats(r.lots, sig?.price ?? null, sig?.prev_close ?? null);
+  const held = lots.length > 0;
+
+  const price = sig?.price ?? null;
+  const pc = sig?.prev_close ?? null;
+  const hi = sig?.week52_high ?? null;
+  const lo = sig?.week52_low ?? null;
+  const zl = sig?.zone_low ?? null;
+  const zh = sig?.zone_high ?? null;
+  const rsiVal = sig?.rsi ?? null;
+
+  const pctFromHigh = price != null && hi ? ((price - hi) / hi) * 100 : null;
+  const maD50 = price != null && sig?.ma50 ? (price / sig.ma50 - 1) * 100 : null;
+  const maD200 = price != null && sig?.ma200 ? (price / sig.ma200 - 1) * 100 : null;
+  const zonePos: ZonePos =
+    price != null && zl != null && zh != null ? (price < zl ? "below" : price > zh ? "above" : "in") : null;
+  const rsiLabel = rsiVal == null ? "" : rsiVal <= 38 ? "oversold" : rsiVal >= 70 ? "overbought" : "neutral";
+  const rsiTone = rsiVal == null ? null : rsiVal <= 38 ? 1 : rsiVal >= 70 ? -1 : 0;
+
+  return (
+    <div className="border-t border-border bg-surface2/40 px-4 py-5 md:px-6">
+      {/* ---- price + today + freshness ---- */}
+      <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-2">
+        <div>
+          <div className={LABEL}>Current price</div>
+          <div className="mt-0.5 font-display text-3xl font-semibold text-text tnum">
+            {price != null ? `$${fprice(price)}` : "—"}
+          </div>
+          {price != null && pc != null && (
+            <div className={`font-mono text-sm tnum ${col(st.dayPct)}`}>
+              {held ? `${moneySigned(st.dayChange)} ` : ""}
+              {held ? "(" : ""}
+              {pct(st.dayPct)}
+              {held ? ")" : ""} today
+            </div>
+          )}
+        </div>
+        <div className="text-right font-mono text-xs text-dim tnum">
+          {pc != null && <div>prev close ${fprice(pc)}</div>}
+          <div>updated {fmtAgo(sig?.updated_at ?? null)}</div>
+        </div>
+      </div>
+
+      {/* ---- 52-week range ---- */}
+      {price != null && lo != null && hi != null && (
+        <div className="mt-5">
+          <div className="flex items-center justify-between">
+            <span className={LABEL}>52-week range</span>
+            {pctFromHigh != null && (
+              <span className="font-mono text-xs text-dim tnum">{pct(pctFromHigh)} from high</span>
+            )}
+          </div>
+          <RangeBar low={lo} cur={price} high={hi} />
+          <div className="mt-1 flex justify-between font-mono text-xs text-dim tnum">
+            <span>${fprice(lo)}</span>
+            <span>${fprice(hi)}</span>
+          </div>
+        </div>
+      )}
+
+      {/* ---- signal read + score ---- */}
+      {sig?.assessment ? (
+        <div className="mt-5">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <SignalChip sig={sig} withScore={false} />
+            {sig.score != null && (
+              <div className="flex items-center gap-2">
+                <div className="h-1.5 w-24 overflow-hidden rounded-full bg-black/10">
+                  <div className="h-full rounded-full bg-text" style={{ width: `${sig.score}%` }} />
+                </div>
+                <span className="font-mono text-xs text-dim tnum">{sig.score}/100</span>
+              </div>
+            )}
+          </div>
+          <p className="mt-2 text-sm text-dim">{signalRead(sig, zonePos, rsiLabel)}</p>
+        </div>
+      ) : (
+        <p className="mt-5 text-sm text-dim">No signal yet — hit ↻ Refresh or wait for the daily update.</p>
+      )}
+
+      {/* ---- technicals ---- */}
+      <div className="mt-4 grid grid-cols-2 gap-2.5 md:grid-cols-4">
+        <Tile label="RSI (14)" tone={rsiTone}>
+          {rsiVal != null ? `${Math.round(rsiVal)} · ${rsiLabel}` : "—"}
+        </Tile>
+        <Tile label="vs 50-day" tone={maD50}>{maD50 != null ? pct(maD50) : "—"}</Tile>
+        <Tile label="vs 200-day" tone={maD200}>{maD200 != null ? pct(maD200) : "—"}</Tile>
+        <Tile label="1-yr return" tone={sig?.ret_1y ?? null}>
+          {sig?.ret_1y != null ? pct(sig.ret_1y) : "—"}
+        </Tile>
+      </div>
+
+      {/* ---- buy zone ---- */}
+      {zl != null && zh != null && (
+        <div className="mt-4 flex items-center justify-between rounded-lg border border-border bg-surface px-3 py-2">
+          <div>
+            <div className={LABEL}>Buy zone</div>
+            <div className="mt-0.5 font-mono text-sm text-text tnum">
+              ${fprice(zl)} – ${fprice(zh)}
+            </div>
+          </div>
+          <span className="font-mono text-xs text-dim">
+            {zonePos === "in" ? "✓ in zone" : zonePos === "below" ? "below zone" : zonePos === "above" ? "above zone" : "—"}
+          </span>
+        </div>
+      )}
+
+      {/* ---- position (held only) ---- */}
+      {held && (
+        <div className="mt-5 border-t border-border pt-4">
+          <div className={`mb-2 ${LABEL}`}>Your position</div>
+          <div className="grid grid-cols-2 gap-2.5 md:grid-cols-4">
+            <Tile label="Shares">{shares(st.qty)}</Tile>
+            <Tile label="Avg cost">${fprice(st.avgCost)}</Tile>
+            <Tile label="Cost basis">{money(st.costBasis)}</Tile>
+            <Tile label="Market value">{money(st.value)}</Tile>
+            <Tile label="Unrealized P&amp;L" tone={st.pnl}>{moneySigned(st.pnl)}</Tile>
+            <Tile label="Return" tone={st.pnlPct}>{pct(st.pnlPct)}</Tile>
+            <Tile label="Day change" tone={st.dayChange}>{moneySigned(st.dayChange)}</Tile>
+          </div>
+        </div>
+      )}
+
+      {/* ---- buys + alerts editors ---- */}
+      <div className="mt-5 grid gap-5 border-t border-border pt-4 md:grid-cols-2">
+        <div>
+          <div className={`mb-2 ${LABEL}`}>Buys</div>
+          {lots.length === 0 && <div className="text-sm text-dim">Watch-only — no position.</div>}
+          <ul className="space-y-1">
+            {lots.map((l, i) => (
+              <li key={i} className="flex items-center justify-between gap-3 text-sm">
+                <span className="font-mono tnum text-text">
+                  {shares(l.qty)} <span className="text-faint">@</span> ${fprice(l.price)}
+                </span>
+                <span className="flex items-center gap-3">
+                  <span className="font-mono text-xs text-dim tnum">
+                    {l.date ? new Date(l.date * 1000).toLocaleDateString() : "—"}
+                  </span>
+                  <form action={removeLot}>
+                    <input type="hidden" name="symbol" value={r.symbol} />
+                    <input type="hidden" name="index" value={i} />
+                    <button className="text-faint hover:text-loss" title="Remove buy" aria-label="Remove buy">
+                      ✕
+                    </button>
+                  </form>
+                </span>
+              </li>
+            ))}
+          </ul>
+          <form action={addLot} className="mt-3 flex flex-wrap items-end gap-2">
+            <input type="hidden" name="symbol" value={r.symbol} />
+            <label className="flex flex-col text-[10px] uppercase tracking-wide text-faint">
+              Qty
+              <input
+                name="qty"
+                type="number"
+                step="any"
+                required
+                placeholder="0"
+                className="mt-0.5 w-20 rounded-md border border-border bg-surface px-2 py-1.5 font-mono text-sm text-text tnum outline-none focus:border-accent"
+              />
+            </label>
+            <label className="flex flex-col text-[10px] uppercase tracking-wide text-faint">
+              Price
+              <input
+                name="price"
+                type="number"
+                step="any"
+                required
+                placeholder="0.00"
+                className="mt-0.5 w-24 rounded-md border border-border bg-surface px-2 py-1.5 font-mono text-sm text-text tnum outline-none focus:border-accent"
+              />
+            </label>
+            <label className="flex flex-col text-[10px] uppercase tracking-wide text-faint">
+              Date
+              <input
+                name="date"
+                type="date"
+                className="mt-0.5 rounded-md border border-border bg-surface px-2 py-1.5 font-mono text-sm text-text outline-none focus:border-accent"
+              />
+            </label>
+            <button className="rounded-md bg-accent px-3 py-1.5 text-sm font-semibold text-bg hover:brightness-110">
+              + Add buy
+            </button>
+          </form>
+        </div>
+
+        <div>
+          <div className={`mb-2 ${LABEL}`}>Price alerts</div>
+          <form action={setAlerts} className="flex flex-wrap items-end gap-2">
+            <input type="hidden" name="symbol" value={r.symbol} />
+            <label className="flex flex-col text-[10px] uppercase tracking-wide text-faint">
+              Below
+              <input
+                name="below"
+                type="number"
+                step="any"
+                defaultValue={r.alert_below ?? ""}
+                placeholder="—"
+                className="mt-0.5 w-24 rounded-md border border-border bg-surface px-2 py-1.5 font-mono text-sm text-text tnum outline-none focus:border-washout"
+              />
+            </label>
+            <label className="flex flex-col text-[10px] uppercase tracking-wide text-faint">
+              Above
+              <input
+                name="above"
+                type="number"
+                step="any"
+                defaultValue={r.alert_above ?? ""}
+                placeholder="—"
+                className="mt-0.5 w-24 rounded-md border border-border bg-surface px-2 py-1.5 font-mono text-sm text-text tnum outline-none focus:border-overbought"
+              />
+            </label>
+            <button className="rounded-md border border-border px-3 py-1.5 text-sm text-text hover:bg-surface2">
+              Save
+            </button>
+          </form>
+          <form action={removeSymbol} className="mt-4">
+            <input type="hidden" name="symbol" value={r.symbol} />
+            <button className="text-xs text-faint hover:text-loss">Remove {r.symbol} ✕</button>
+          </form>
+        </div>
+      </div>
     </div>
   );
 }
@@ -417,10 +561,12 @@ export default function PortfolioView({
                   </div>
                 </div>
                 <div className="shrink-0 space-y-0.5 text-right">
-                  <div className="font-mono text-sm font-medium text-text tnum">{money(st.value)}</div>
+                  <div className="font-mono text-sm font-medium text-text tnum">
+                    ${r.sig?.price != null ? fprice(r.sig.price) : "—"}
+                  </div>
                   <div className={`font-mono text-xs tnum ${col(st.dayPct)}`}>{pct(st.dayPct)} today</div>
                   <div className={`font-mono text-xs tnum ${col(st.pnl)}`}>
-                    {moneySigned(st.pnl)} · {pct(st.pnlPct)} all
+                    {money(st.value)} · {pct(st.pnlPct)}
                   </div>
                 </div>
               </button>
