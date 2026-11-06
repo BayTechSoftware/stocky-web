@@ -49,7 +49,18 @@ function LimitsUsed({ b }: { b: AiBookView }) {
     return (
       <div className="grid gap-3 sm:grid-cols-2">
         <Meter label="Trades today" used={used?.trades_today ?? null} max={Number(cfg.max_trades_per_day)} fmt={(n) => String(n)} />
-        <Meter label="Loss today" used={used?.loss_today_usd ?? null} max={Number(cfg.max_daily_loss_usd)} fmt={(n) => `$${n.toFixed(0)}`} />
+        <Meter
+          label="Daily-loss budget used (loss at stops)"
+          used={used?.loss_at_risk_usd ?? null}
+          max={Number(cfg.max_daily_loss_usd)}
+          fmt={(n) => `$${n.toFixed(0)}`}
+        />
+        <div className="flex justify-between text-[11px]">
+          <span className="text-dim">Realized P&amp;L today</span>
+          <span className={`font-mono tnum ${col(used?.realized_pnl_today_usd)}`}>
+            {used?.realized_pnl_today_usd != null ? moneySigned(used.realized_pnl_today_usd, 2) : "—"}
+          </span>
+        </div>
         <div className="flex justify-between text-[11px]">
           <span className="text-dim">Open risk to stops</span>
           <span className="font-mono text-text tnum">{used?.open_risk_usd != null ? money(used.open_risk_usd, 2) : "—"}</span>

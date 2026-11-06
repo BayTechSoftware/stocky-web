@@ -63,7 +63,10 @@ export interface Decision {
 
 /** One thing Claude did during a run (from its stream-json transcript, recorded on the Mac). */
 export interface TraceItem {
-  t: number; // seconds since the run started
+  at?: number; // seconds since the run started
+  t?: number; // (older name for `at`)
+  tool?: string;
+  ok?: boolean;
   kind: "tool" | "text" | "blocked" | "error" | string;
   label: string;
   detail?: string;
@@ -98,7 +101,14 @@ export interface RunSummary {
   steps?: PipelineStep[];
   limits?: {
     config?: Record<string, number | string>;
-    used?: { trades_today?: number | null; loss_today_usd?: number | null; open_risk_usd?: number | null; cash?: number | null };
+    used?: {
+      trades_today?: number | null;
+      loss_today_usd?: number | null; // realized loss today (positive = loss)
+      realized_pnl_today_usd?: number | null;
+      loss_at_risk_usd?: number | null; // what the repo's daily-loss check counts: today's entries' loss at their stops
+      open_risk_usd?: number | null;
+      cash?: number | null;
+    };
   };
   guard_blocks?: { at?: string; tool?: string; why?: string }[];
   settings_source?: "web" | "default";

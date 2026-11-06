@@ -165,7 +165,7 @@ export function Trace({ trace }: { trace: TraceItem[] }) {
         <li key={i} className="relative">
           <span className={`absolute -left-[16.5px] top-1.5 h-2 w-2 rounded-full ${KIND_DOT[x.kind] ?? "bg-faint"}`} />
           <div className="flex items-baseline gap-2 text-xs">
-            <span className="w-9 shrink-0 text-right font-mono text-[10px] text-faint tnum">{Math.round(x.t)}s</span>
+            <span className="w-9 shrink-0 text-right font-mono text-[10px] text-faint tnum">{Math.round(x.at ?? x.t ?? 0)}s</span>
             <span
               className={`min-w-0 ${x.kind === "text" ? "text-text" : x.kind === "blocked" ? "text-loss" : "font-mono text-[11px] text-dim"}`}
             >
