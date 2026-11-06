@@ -34,8 +34,10 @@ export interface AiOrderView {
   created_at: string;
 }
 
+export type AiBookKey = "mylist" | "free" | "claude-mylist" | "claude-free";
+
 export interface AiBookView {
-  key: "mylist" | "free";
+  key: AiBookKey;
   name: string;
   startCash: number;
   cash: number;
@@ -162,7 +164,7 @@ export async function loadAiView(supabase: SupabaseClient): Promise<AiView | nul
 
     const run = runs.find((r) => r.book_id === b.id);
     return {
-      key: b.key as "mylist" | "free",
+      key: b.key as AiBookKey,
       name: b.name as string,
       startCash: start,
       cash: st.cash,
@@ -186,7 +188,8 @@ export async function loadAiView(supabase: SupabaseClient): Promise<AiView | nul
     };
   });
 
-  // My List first, then Free Choice.
-  views.sort((a, b) => (a.key === "mylist" ? -1 : 1) - (b.key === "mylist" ? -1 : 1));
+  // Side by side: each rules book next to its Claude twin.
+  const ORDER: AiBookKey[] = ["mylist", "claude-mylist", "free", "claude-free"];
+  views.sort((a, b) => ORDER.indexOf(a.key) - ORDER.indexOf(b.key));
   return { books: views, accountEquity, marketOpen, error };
 }

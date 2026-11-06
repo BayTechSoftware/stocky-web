@@ -10,8 +10,12 @@ import type { Decision } from "@/lib/aitrader/engine";
 const LABEL = "text-[10px] font-semibold uppercase tracking-wider text-faint";
 
 const BLURB: Record<AiBookView["key"], string> = {
-  mylist: "Trades your watchlist. Enters on Stocky BUY / WASHOUT (score ≥ 60); exits on OVERBOUGHT or its stop / target.",
-  free: "The skills' pick: breakout, bull flag, MA20 reclaim or oversold bounce across ~140 large caps in an uptrend. 21-day time stop.",
+  mylist: "Rules only, no AI. Your watchlist on Stocky BUY / WASHOUT (score ≥ 60); exits on OVERBOUGHT or its stop / target.",
+  free: "Rules only, no AI. The skill's chart patterns across ~140 large caps in an uptrend; 21-day time stop.",
+  "claude-mylist":
+    "Claude Sonnet runs the day-trader-skill repo on your watchlist: scans, reads the news, times entries, flat by 3:55 pm. On your Mac, every 15 min.",
+  "claude-free":
+    "Claude Sonnet runs the day-trader-skill repo across ~5,900 US stocks: free choice, reads the news, flat by 3:55 pm. On your Mac, every 15 min.",
 };
 
 function col(v: number | null | undefined) {
@@ -42,7 +46,7 @@ export default function AiTrader({ ai }: { ai: AiView | null }) {
   }
 
   function go(mode: "manual" | "dry") {
-    if (mode === "manual" && !confirm("Run the AI Trader now? It will place PAPER orders (simulated money).")) return;
+    if (mode === "manual" && !confirm("Run the two Rules books now? They will place PAPER orders (simulated money).")) return;
     setMsg(null);
     start(async () => {
       const r = await runAiTrader(mode);
@@ -69,8 +73,9 @@ export default function AiTrader({ ai }: { ai: AiView | null }) {
             </div>
             <h2 className="mt-1.5 font-display text-xl font-semibold text-text">AI Trader</h2>
             <p className="mt-0.5 text-xs text-dim">
-              Two $5,000 books on your Alpaca paper account. Runs automatically on weekdays after the US close
-              (5:30 pm ET). Entries are bracket orders that risk 1% of the book.
+              Four $5,000 paper books: <b>Rules</b> (fixed code, runs on the website after the US close) next to{" "}
+              <b>Claude</b> (Claude Sonnet running the day-trader-skill repo on your Mac during market hours). Same
+              money, same account — compare them side by side.
             </p>
           </div>
           <div className="flex shrink-0 gap-2">
@@ -79,21 +84,21 @@ export default function AiTrader({ ai }: { ai: AiView | null }) {
               disabled={busy}
               className="rounded-lg border border-border bg-surface px-3 py-1.5 text-sm text-dim hover:bg-surface2 hover:text-text disabled:opacity-60"
             >
-              Dry run
+              Dry run (rules)
             </button>
             <button
               onClick={() => go("manual")}
               disabled={busy}
               className="rounded-lg bg-accent px-3 py-1.5 text-sm font-semibold text-bg hover:brightness-110 disabled:opacity-60"
             >
-              {busy ? "Running…" : "Run now"}
+              {busy ? "Running…" : "Run rules now"}
             </button>
           </div>
         </div>
 
         <div className="mt-4 flex flex-wrap items-end gap-x-8 gap-y-2 border-t border-border pt-4">
           <div>
-            <div className={LABEL}>Total (both books)</div>
+            <div className={LABEL}>Total (all books)</div>
             <div className="font-display text-2xl font-semibold text-text tnum">{money(total, 2)}</div>
           </div>
           <div className={`font-mono text-sm tnum ${col(total - startTotal)}`}>
@@ -121,9 +126,9 @@ export default function AiTrader({ ai }: { ai: AiView | null }) {
       </div>
 
       <p className="text-[11px] leading-relaxed text-faint">
-        Paper trading only — the server refuses non-paper keys and accounts. Rules are fixed and deterministic (no
-        model in the loop), inspired by the open-source Trader skill. Not investment advice; past or simulated results
-        don&apos;t predict future returns.
+        Paper trading only — both the website and the Mac refuse non-paper keys and accounts. Rules books are fixed
+        code; Claude books are Claude running the open-source day-trader-skill repo (MIT) with its own risk checks. Not
+        investment advice; past or simulated results don&apos;t predict future returns.
       </p>
     </section>
   );
@@ -212,8 +217,14 @@ function BookCard({ b }: { b: AiBookView }) {
             <span className={LABEL}>Last run</span>
             <span className="font-mono text-xs text-dim">{run ? `${when(run.ran_at)} · ${run.mode}` : "not run yet"}</span>
           </div>
-          {run?.mode === "dry" && (
-            <p className="mt-1 text-[11px] text-watch">Dry run — these decisions were computed, nothing was placed.</p>
+          {run?.summary?.usage?.cost_usd != null && (
+            <p className="mt-1 font-mono text-[11px] text-faint tnum">
+              Claude: {run.summary.usage.turns ?? "?"} turns · {Math.round(run.summary.usage.secs ?? 0)}s · ≈$
+              {Number(run.summary.usage.cost_usd).toFixed(2)} of usage
+            </p>
+          )}
+          {(run?.mode === "dry" || run?.mode === "claude-dry") && (
+            <p className="mt-1 text-[11px] text-watch">Dry run — these decisions were made, nothing was placed.</p>
           )}
           {run?.error && <p className="mt-2 text-xs text-loss">{run.error}</p>}
           {run?.summary?.halted && <p className="mt-2 text-xs text-watch">{run.summary.halted}</p>}

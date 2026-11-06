@@ -50,7 +50,7 @@ interface OrderRow {
 
 export interface Decision {
   symbol: string;
-  action: "buy" | "sell" | "skip" | "cancel";
+  action: "buy" | "sell" | "skip" | "cancel" | "hold" | "watch";
   qty?: number;
   price?: number;
   stop?: number;
@@ -60,7 +60,10 @@ export interface Decision {
 
 export interface RunSummary {
   book: string;
-  mode: RunMode;
+  mode: RunMode | "claude" | "claude-dry";
+  phase?: string;
+  reason?: string;
+  usage?: { cost_usd?: number | null; turns?: number | null; secs?: number | null };
   equity: number;
   cash: number;
   available: number;
@@ -89,7 +92,11 @@ const round2 = (v: number) => Math.round(v * 100) / 100;
 export async function runAiTrader(opts: { admin: Admin; mode: RunMode; userId?: string }): Promise<RunSummary[]> {
   const { admin, mode } = opts;
 
-  let bq = admin.from("ai_books").select("id, user_id, key, name, start_cash, created_at");
+  // Only the two rules books — the "claude-*" books are run by Claude on the Mac.
+  let bq = admin
+    .from("ai_books")
+    .select("id, user_id, key, name, start_cash, created_at")
+    .in("key", ["mylist", "free"]);
   if (opts.userId) bq = bq.eq("user_id", opts.userId);
   const { data: booksData, error: booksErr } = await bq;
   if (booksErr) throw new Error(booksErr.message);
