@@ -22,6 +22,8 @@ import {
   type Lot,
 } from "@/lib/portfolio";
 import DevicePairing, { type DeviceToken } from "./device-pairing";
+import AiTrader from "./ai-trader";
+import type { AiView } from "@/lib/aitrader/view";
 
 export interface Sig {
   price: number | null;
@@ -376,12 +378,14 @@ export default function PortfolioView({
   rows,
   email,
   devices,
+  ai,
 }: {
   rows: Row[];
   email: string;
   devices: DeviceToken[];
+  ai: AiView | null;
 }) {
-  const [tab, setTab] = useState<"holdings" | "watchlist">("holdings");
+  const [tab, setTab] = useState<"holdings" | "watchlist" | "ai">("holdings");
   const [filter, setFilter] = useState<string>("ALL");
   const [open, setOpen] = useState<string | null>(null);
   const [showDevice, setShowDevice] = useState(false);
@@ -528,6 +532,11 @@ export default function PortfolioView({
           <TabBtn active={tab === "watchlist"} onClick={() => setTab("watchlist")}>
             Watchlist <span className="ml-1 text-faint tnum">{rows.length}</span>
           </TabBtn>
+          {ai && (
+            <TabBtn active={tab === "ai"} onClick={() => setTab("ai")}>
+              AI Trader
+            </TabBtn>
+          )}
         </div>
       </div>
 
@@ -706,6 +715,9 @@ export default function PortfolioView({
           </div>
         </section>
       )}
+
+      {/* ---------- AI TRADER ---------- */}
+      {tab === "ai" && <AiTrader ai={ai} />}
 
       {/* ---------- device ---------- */}
       <div className="mt-8">

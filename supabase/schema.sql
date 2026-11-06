@@ -79,3 +79,81 @@ create table if not exists public.signal_history (
 alter table public.signal_history enable row level security;
 create policy "history read authenticated" on public.signal_history
   for select using (auth.role() = 'authenticated');
+
+-- 4) AI Trader — virtual $5K books inside ONE Alpaca PAPER account -------------
+-- Each book's cash/positions are rebuilt from its own fills (ai_fills), attributed
+-- by Alpaca order id. Rows are written only by the server (service role).
+create table if not exists public.ai_books (
+  id          uuid primary key default gen_random_uuid(),
+  user_id     uuid not null references auth.users (id) on delete cascade,
+  key         text not null check (key in ('mylist','free')),
+  name        text not null,
+  start_cash  double precision not null check (start_cash > 0),
+  created_at  timestamptz not null default now(),
+  unique (user_id, key)
+);
+create table if not exists public.ai_orders (
+  id              uuid primary key default gen_random_uuid(),
+  book_id         uuid not null references public.ai_books (id) on delete cascade,
+  symbol          text not null,
+  side            text not null check (side in ('buy','sell')),
+  kind            text not null check (kind in ('entry','exit')),
+  qty             double precision not null,
+  ref_price       double precision,
+  limit_price     double precision,
+  stop_price      double precision,
+  target_price    double precision,
+  reason          text,
+  alpaca_order_id text unique,
+  leg_ids         text[] not null default '{}',
+  client_order_id text,
+  status          text not null default 'submitted',
+  filled_qty      double precision not null default 0,
+  filled_avg      double precision,
+  created_at      timestamptz not null default now()
+);
+create index if not exists ai_orders_book_idx on public.ai_orders (book_id, created_at desc);
+create table if not exists public.ai_fills (
+  activity_id     text primary key,
+  book_id         uuid not null references public.ai_books (id) on delete cascade,
+  order_id        text not null,
+  symbol          text not null,
+  side            text not null check (side in ('buy','sell')),
+  qty             double precision not null,
+  price           double precision not null,
+  transacted_at   timestamptz not null
+);
+create index if not exists ai_fills_book_idx on public.ai_fills (book_id, transacted_at);
+create table if not exists public.ai_runs (
+  id       uuid primary key default gen_random_uuid(),
+  book_id  uuid not null references public.ai_books (id) on delete cascade,
+  ran_at   timestamptz not null default now(),
+  mode     text not null check (mode in ('cron','manual','dry')),
+  summary  jsonb not null default '{}'::jsonb,
+  error    text
+);
+create index if not exists ai_runs_book_idx on public.ai_runs (book_id, ran_at desc);
+create table if not exists public.ai_equity (
+  book_id  uuid not null references public.ai_books (id) on delete cascade,
+  as_of    date not null,
+  equity   double precision not null,
+  cash     double precision not null,
+  primary key (book_id, as_of)
+);
+alter table public.ai_books  enable row level security;
+alter table public.ai_orders enable row level security;
+alter table public.ai_fills  enable row level security;
+alter table public.ai_runs   enable row level security;
+alter table public.ai_equity enable row level security;
+create policy "ai_books owner read" on public.ai_books for select using (auth.uid() = user_id);
+create policy "ai_orders owner read" on public.ai_orders for select
+  using (exists (select 1 from public.ai_books b where b.id = book_id and b.user_id = auth.uid()));
+create policy "ai_fills owner read" on public.ai_fills for select
+  using (exists (select 1 from public.ai_books b where b.id = book_id and b.user_id = auth.uid()));
+create policy "ai_runs owner read" on public.ai_runs for select
+  using (exists (select 1 from public.ai_books b where b.id = book_id and b.user_id = auth.uid()));
+create policy "ai_equity owner read" on public.ai_equity for select
+  using (exists (select 1 from public.ai_books b where b.id = book_id and b.user_id = auth.uid()));
+-- Books are seeded per owner, e.g.:
+--   insert into public.ai_books (user_id, key, name, start_cash) values
+--     ('<uid>','mylist','My List',5000), ('<uid>','free','Free Choice',5000);

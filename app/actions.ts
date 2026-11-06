@@ -3,6 +3,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { computeSignalsForSymbols } from "@/lib/refresh";
+import { runAiTrader as runAiTraderEngine } from "@/lib/aitrader/engine";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { randomBytes, createHash } from "node:crypto";
@@ -227,3 +228,28 @@ export async function signOut() {
   await supabase.auth.signOut();
   redirect("/login");
 }
+
+/**
+ * Run the AI Trader's paper books now (Run now), or compute the decisions without
+ * placing anything (Dry run). Only for a user who owns AI books.
+ */
+export async function runAiTrader(
+  mode: "manual" | "dry"
+): Promise<{ message: string } | { error: string }> {
+  const { supabase, user } = await uid();
+  if (!user) return { error: "not signed in" };
+  const { data: books } = await supabase.from("ai_books").select("id").eq("user_id", user.id);
+  if (!books?.length) return { error: "AI Trader isn't enabled for this account" };
+  try {
+    const res = await runAiTraderEngine({ admin: createAdminClient(), mode, userId: user.id });
+    revalidatePath("/dashboard");
+    const failed = res.filter((r) => r.error);
+    if (failed.length) return { error: failed.map((r) => `${r.book}: ${r.error}`).join(" · ") };
+    const n = (a: string) => res.reduce((k, r) => k + r.decisions.filter((d) => d.action === a).length, 0);
+    const verb = mode === "dry" ? "Dry run (nothing placed)" : "Run complete";
+    return { message: `${verb}: ${n("buy")} buy, ${n("sell")} sell, ${n("cancel")} cancel` };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
+}
+

@@ -1,6 +1,10 @@
 import { createClient } from "@/lib/supabase/server";
 import PortfolioView, { type Row, type Sig } from "./portfolio-view";
 import { type DeviceToken } from "./device-pairing";
+import { loadAiView } from "@/lib/aitrader/view";
+
+// Room for the AI Trader "Run now" server action (Alpaca calls + order placement).
+export const maxDuration = 120;
 
 export default async function Dashboard() {
   const supabase = await createClient();
@@ -33,7 +37,14 @@ export default async function Dashboard() {
     .select("id, label, created_at, last_used_at")
     .order("created_at", { ascending: false });
 
+  const ai = await loadAiView(supabase);
+
   return (
-    <PortfolioView rows={rows} email={user?.email ?? ""} devices={(dev ?? []) as DeviceToken[]} />
+    <PortfolioView
+      rows={rows}
+      email={user?.email ?? ""}
+      devices={(dev ?? []) as DeviceToken[]}
+      ai={ai}
+    />
   );
 }
