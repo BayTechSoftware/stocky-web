@@ -1,10 +1,10 @@
 /**
  * Alpaca client — PAPER ONLY. SERVER ONLY.
  *
- * The trading base URL is a constant (never read from env), and the key must be
- * a paper key ("PK…") and the account a paper account ("PA…") before any call is
- * made. So even a misconfigured live key cannot move real money through this
- * module: it refuses instead.
+ * Every call takes the user's own credentials (stored encrypted per user in
+ * Supabase Vault — never a site-wide env var). The trading base URL is a
+ * constant, the key must be a paper key ("PK…") and the account a paper account
+ * ("PA…"), so even a live key cannot move real money through this module.
  */
 
 const TRADE = "https://paper-api.alpaca.markets";
@@ -19,26 +19,26 @@ export class AlpacaError extends Error {
   }
 }
 
-export function alpacaConfigured(): boolean {
-  return Boolean(process.env.ALPACA_KEY_ID && process.env.ALPACA_SECRET_KEY);
+/** A user's Alpaca paper credentials. */
+export interface Creds {
+  keyId: string;
+  secret: string;
 }
 
-function headers(): Record<string, string> {
-  const id = process.env.ALPACA_KEY_ID;
-  const secret = process.env.ALPACA_SECRET_KEY;
-  if (!id || !secret) throw new AlpacaError("Alpaca paper keys are not configured", 0);
-  if (!id.startsWith("PK")) {
-    throw new AlpacaError("Refusing: ALPACA_KEY_ID is not a paper key (paper keys start with PK)", 0);
+function headers(c: Creds): Record<string, string> {
+  if (!c?.keyId || !c?.secret) throw new AlpacaError("Alpaca paper account not connected", 0);
+  if (!c.keyId.startsWith("PK")) {
+    throw new AlpacaError("Refusing: not a paper key (paper keys start with PK)", 0);
   }
   return {
-    "APCA-API-KEY-ID": id,
-    "APCA-API-SECRET-KEY": secret,
+    "APCA-API-KEY-ID": c.keyId,
+    "APCA-API-SECRET-KEY": c.secret,
     "Content-Type": "application/json",
   };
 }
 
-async function call<T>(base: string, path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(base + path, { ...init, headers: headers(), cache: "no-store" });
+async function call<T>(c: Creds, base: string, path: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(base + path, { ...init, headers: headers(c), cache: "no-store" });
   if (res.status === 204) return undefined as T;
   const text = await res.text();
   let body: unknown = null;
@@ -65,8 +65,8 @@ export interface Account {
 }
 
 /** Fetch the account and assert it is a paper account. */
-export async function getPaperAccount(): Promise<Account> {
-  const a = await call<Account>(TRADE, "/v2/account");
+export async function getPaperAccount(c: Creds): Promise<Account> {
+  const a = await call<Account>(c, TRADE, "/v2/account");
   if (!a.account_number?.startsWith("PA")) {
     throw new AlpacaError("Refusing: account is not a paper account", 0);
   }
@@ -79,11 +79,11 @@ export interface Clock {
   next_open: string;
   next_close: string;
 }
-export const getClock = () => call<Clock>(TRADE, "/v2/clock");
+export const getClock = (c: Creds) => call<Clock>(c, TRADE, "/v2/clock");
 
 /** True if `date` (YYYY-MM-DD, ET) is a trading day. */
-export async function isTradingDay(date: string): Promise<boolean> {
-  const cal = await call<{ date: string }[]>(TRADE, `/v2/calendar?start=${date}&end=${date}`);
+export async function isTradingDay(c: Creds, date: string): Promise<boolean> {
+  const cal = await call<{ date: string }[]>(c, TRADE, `/v2/calendar?start=${date}&end=${date}`);
   return cal.some((d) => d.date === date);
 }
 
@@ -102,7 +102,7 @@ export interface Order {
   legs?: Order[] | null;
 }
 
-export async function listOrders(afterIso: string): Promise<Order[]> {
+export async function listOrders(c: Creds, afterIso: string): Promise<Order[]> {
   const q = new URLSearchParams({
     status: "all",
     nested: "true",
@@ -110,17 +110,17 @@ export async function listOrders(afterIso: string): Promise<Order[]> {
     limit: "500",
     direction: "asc",
   });
-  return call<Order[]>(TRADE, `/v2/orders?${q}`);
+  return call<Order[]>(c, TRADE, `/v2/orders?${q}`);
 }
 
-export const submitOrder = (body: Record<string, unknown>) =>
-  call<Order>(TRADE, "/v2/orders", { method: "POST", body: JSON.stringify(body) });
+export const submitOrder = (c: Creds, body: Record<string, unknown>) =>
+  call<Order>(c, TRADE, "/v2/orders", { method: "POST", body: JSON.stringify(body) });
 
-export const cancelOrder = (id: string) =>
-  call<void>(TRADE, `/v2/orders/${encodeURIComponent(id)}`, { method: "DELETE" });
+export const cancelOrder = (c: Creds, id: string) =>
+  call<void>(c, TRADE, `/v2/orders/${encodeURIComponent(id)}`, { method: "DELETE" });
 
-export const getOrder = (id: string) =>
-  call<Order>(TRADE, `/v2/orders/${encodeURIComponent(id)}?nested=true`);
+export const getOrder = (c: Creds, id: string) =>
+  call<Order>(c, TRADE, `/v2/orders/${encodeURIComponent(id)}?nested=true`);
 
 export interface Position {
   symbol: string;
@@ -129,7 +129,7 @@ export interface Position {
   current_price: string;
   market_value: string;
 }
-export const getPositions = () => call<Position[]>(TRADE, "/v2/positions");
+export const getPositions = (c: Creds) => call<Position[]>(c, TRADE, "/v2/positions");
 
 export interface FillActivity {
   id: string;
@@ -142,13 +142,13 @@ export interface FillActivity {
 }
 
 /** All fill executions after `afterIso`, oldest first (paginated). */
-export async function listFills(afterIso: string): Promise<FillActivity[]> {
+export async function listFills(c: Creds, afterIso: string): Promise<FillActivity[]> {
   const out: FillActivity[] = [];
   let pageToken: string | undefined;
   for (let guard = 0; guard < 20; guard++) {
     const q = new URLSearchParams({ after: afterIso, direction: "asc", page_size: "100" });
     if (pageToken) q.set("page_token", pageToken);
-    const page = await call<FillActivity[]>(TRADE, `/v2/account/activities/FILL?${q}`);
+    const page = await call<FillActivity[]>(c, TRADE, `/v2/account/activities/FILL?${q}`);
     out.push(...page);
     if (page.length < 100) break;
     pageToken = page[page.length - 1].id;
@@ -168,7 +168,7 @@ export interface Bar {
 }
 
 /** Daily bars per symbol, oldest → newest, split-adjusted. Chunked + paginated. */
-export async function getDailyBars(symbols: string[], startDate: string): Promise<Record<string, Bar[]>> {
+export async function getDailyBars(c: Creds, symbols: string[], startDate: string): Promise<Record<string, Bar[]>> {
   const out: Record<string, Bar[]> = {};
   const uniq = Array.from(new Set(symbols));
   for (let i = 0; i < uniq.length; i += 50) {
@@ -185,6 +185,7 @@ export async function getDailyBars(symbols: string[], startDate: string): Promis
       });
       if (pageToken) q.set("page_token", pageToken);
       const page = await call<{ bars: Record<string, Bar[]>; next_page_token: string | null }>(
+        c,
         DATA,
         `/v2/stocks/bars?${q}`
       );
@@ -199,13 +200,14 @@ export async function getDailyBars(symbols: string[], startDate: string): Promis
 }
 
 /** Latest trade price per symbol (IEX). */
-export async function getLatestPrices(symbols: string[]): Promise<Record<string, number>> {
+export async function getLatestPrices(c: Creds, symbols: string[]): Promise<Record<string, number>> {
   const out: Record<string, number> = {};
   const uniq = Array.from(new Set(symbols));
   for (let i = 0; i < uniq.length; i += 100) {
     const chunk = uniq.slice(i, i + 100);
     const q = new URLSearchParams({ symbols: chunk.join(","), feed: "iex" });
     const snaps = await call<Record<string, { latestTrade?: { p: number } }>>(
+      c,
       DATA,
       `/v2/stocks/snapshots?${q}`
     );

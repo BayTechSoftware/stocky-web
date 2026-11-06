@@ -2,6 +2,7 @@ import { createClient } from "@/lib/supabase/server";
 import PortfolioView, { type Row, type Sig } from "./portfolio-view";
 import { type DeviceToken } from "./device-pairing";
 import { loadAiView } from "@/lib/aitrader/view";
+import { createAdminClient } from "@/lib/supabase/admin";
 
 // Room for the AI Trader "Run now" server action (Alpaca calls + order placement).
 export const maxDuration = 120;
@@ -37,7 +38,7 @@ export default async function Dashboard() {
     .select("id, label, created_at, last_used_at")
     .order("created_at", { ascending: false });
 
-  const ai = await loadAiView(supabase);
+  const ai = user ? await loadAiView(supabase, { admin: createAdminClient(), userId: user.id }) : null;
 
   return (
     <PortfolioView

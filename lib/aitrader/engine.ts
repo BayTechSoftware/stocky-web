@@ -8,15 +8,17 @@
  *                 the Trader skill's daily setups, with a trend filter; exits on
  *                 the bracket or a 21-day time stop.
  *
- * Every entry is a GTC bracket (limit entry + stop-loss + 2R take-profit), sized
- * to risk 1% of the book. Each run: sync Alpaca → ledger, exits, entries, then an
+ * Every entry is a GTC bracket (limit entry + stop-loss + R-multiple target),
+ * sized by the book's own limits (ai_books.settings, editable in the tab). Each
+ * user's books trade with that user's own paper keys from Supabase Vault — a user
+ * who hasn't connected an Alpaca paper account is simply skipped. Each run: sync Alpaca → ledger, exits, entries, then an
  * equity snapshot and a run log with every decision and its reason. `dry` mode
  * computes everything but places and cancels nothing.
  */
 import type { createAdminClient } from "@/lib/supabase/admin";
 import * as A from "@/lib/alpaca";
 import { bookState } from "./ledger";
-import { RULES, bracket, sizeQty } from "./plan";
+import { bracket, rulesFor, sizeQty, type Rules } from "./plan";
 import { freeUniverse } from "./universe";
 import { atr, rankCandidates, scoreCandidate, type Candidate } from "./setups";
 
@@ -30,6 +32,7 @@ interface BookRow {
   name: string;
   start_cash: number;
   created_at: string;
+  settings: Record<string, unknown> | null;
 }
 
 interface OrderRow {
@@ -58,12 +61,48 @@ export interface Decision {
   reason: string;
 }
 
+/** One thing Claude did during a run (from its stream-json transcript, recorded on the Mac). */
+export interface TraceItem {
+  t: number; // seconds since the run started
+  kind: "tool" | "text" | "blocked" | "error" | string;
+  label: string;
+  detail?: string;
+}
+
+/** One structured result from the repo's pipeline (scanner, news, entry, …, broker). */
+export interface PipelineStep {
+  t?: number;
+  stage: string;
+  symbol?: string;
+  verdict?: string;
+  ok?: boolean | null;
+  summary: string;
+  data?: Record<string, unknown>;
+}
+
+export interface RunUsage {
+  cost_usd?: number | null;
+  turns?: number | null;
+  secs?: number | null;
+  week_usage_usd?: number | null;
+  weekly_cap_usd?: number | null;
+}
+
 export interface RunSummary {
   book: string;
   mode: RunMode | "claude" | "claude-dry";
   phase?: string;
   reason?: string;
-  usage?: { cost_usd?: number | null; turns?: number | null; secs?: number | null };
+  usage?: RunUsage;
+  trace?: TraceItem[];
+  steps?: PipelineStep[];
+  limits?: {
+    config?: Record<string, number | string>;
+    used?: { trades_today?: number | null; loss_today_usd?: number | null; open_risk_usd?: number | null; cash?: number | null };
+  };
+  guard_blocks?: { at?: string; tool?: string; why?: string }[];
+  settings_source?: "web" | "default";
+  marks?: Record<string, number>;
   equity: number;
   cash: number;
   available: number;
@@ -89,27 +128,57 @@ export function etDate(d: Date = new Date()): string {
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const round2 = (v: number) => Math.round(v * 100) / 100;
 
+/** The user's Alpaca paper keys from Vault (service role only), or null if not connected. */
+export async function loadCreds(admin: Admin, userId: string): Promise<A.Creds | null> {
+  const { data, error } = await admin.rpc("get_alpaca_credentials", { p_user: userId });
+  if (error) throw new Error(`vault: ${error.message}`);
+  const c = data as { key_id?: string; secret?: string } | null;
+  return c?.key_id && c?.secret ? { keyId: c.key_id, secret: c.secret } : null;
+}
+
 export async function runAiTrader(opts: { admin: Admin; mode: RunMode; userId?: string }): Promise<RunSummary[]> {
   const { admin, mode } = opts;
 
   // Only the two rules books — the "claude-*" books are run by Claude on the Mac.
   let bq = admin
     .from("ai_books")
-    .select("id, user_id, key, name, start_cash, created_at")
+    .select("id, user_id, key, name, start_cash, created_at, settings")
     .in("key", ["mylist", "free"]);
   if (opts.userId) bq = bq.eq("user_id", opts.userId);
   const { data: booksData, error: booksErr } = await bq;
   if (booksErr) throw new Error(booksErr.message);
-  const books = (booksData ?? []) as BookRow[];
-  if (books.length === 0) return [];
+  const all = (booksData ?? []) as BookRow[];
+
+  // Each user trades with their own paper account.
+  const out: RunSummary[] = [];
+  for (const userId of Array.from(new Set(all.map((b) => b.user_id)))) {
+    const books = all.filter((b) => b.user_id === userId);
+    const skip = (note: string) =>
+      books.map((b) => ({ book: b.name, mode, equity: 0, cash: 0, available: 0, decisions: [], note }));
+    try {
+      const creds = await loadCreds(admin, userId);
+      if (!creds) {
+        out.push(...skip("Alpaca paper account not connected — skipped"));
+        continue;
+      }
+      out.push(...(await runForUser(admin, mode, books, creds)));
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      out.push(...skip("").map((s) => ({ ...s, note: undefined, error: msg })));
+    }
+  }
+  return out;
+}
+
+async function runForUser(admin: Admin, mode: RunMode, books: BookRow[], creds: A.Creds): Promise<RunSummary[]> {
   const bookIds = books.map((b) => b.id);
 
   // Safety first: paper key + paper account, or nothing runs.
-  await A.getPaperAccount();
-  const clock = await A.getClock();
+  await A.getPaperAccount(creds);
+  const clock = await A.getClock(creds);
   const now = new Date(clock.timestamp);
   const today = etDate(now);
-  if (mode === "cron" && !(await A.isTradingDay(today))) {
+  if (mode === "cron" && !(await A.isTradingDay(creds, today))) {
     return books.map((b) => ({
       book: b.name, mode, equity: 0, cash: 0, available: 0, decisions: [], note: "market holiday — skipped",
     }));
@@ -128,7 +197,7 @@ export async function runAiTrader(opts: { admin: Admin; mode: RunMode; userId?: 
     for (const l of o.leg_ids ?? []) bookOfOrder.set(l, o.book_id);
   }
 
-  const remote = await A.listOrders(since);
+  const remote = await A.listOrders(creds, since);
   const remoteById = new Map<string, A.Order>();
   for (const r of remote) {
     remoteById.set(r.id, r);
@@ -154,7 +223,7 @@ export async function runAiTrader(opts: { admin: Admin; mode: RunMode; userId?: 
     }
   }
 
-  const acts = await A.listFills(since);
+  const acts = await A.listFills(creds, since);
   const fillRows = acts
     .filter((a) => bookOfOrder.has(a.order_id))
     .map((a) => ({
@@ -194,14 +263,14 @@ export async function runAiTrader(opts: { admin: Admin; mode: RunMode; userId?: 
   for (const f of allFills) wanted.add(f.symbol as string);
   const symbols = Array.from(wanted);
 
-  const barsBy = await A.getDailyBars(symbols, etDate(new Date(now.getTime() - 420 * 86_400_000)));
+  const barsBy = await A.getDailyBars(creds, symbols, etDate(new Date(now.getTime() - 420 * 86_400_000)));
   if (clock.is_open) {
     // Today's daily bar is still forming — use completed sessions for signals.
     for (const bars of Object.values(barsBy)) {
       if (bars.length && etDate(new Date(bars[bars.length - 1].t)) === today) bars.pop();
     }
   }
-  const live = clock.is_open ? await A.getLatestPrices(symbols) : {};
+  const live = clock.is_open ? await A.getLatestPrices(creds, symbols) : {};
   const priceOf = (s: string): number | null => {
     if (live[s]) return live[s];
     const bars = barsBy[s];
@@ -251,6 +320,7 @@ export async function runAiTrader(opts: { admin: Admin; mode: RunMode; userId?: 
     const st = bookState(b.start_cash, fills);
     const decisions: Decision[] = [];
     const orders = ours.filter((o) => o.book_id === b.id);
+    const R = rulesFor(b.settings);
 
     let value = 0;
     for (const p of st.positions.values()) value += p.qty * (priceOf(p.symbol) ?? p.avgCost);
@@ -260,9 +330,9 @@ export async function runAiTrader(opts: { admin: Admin; mode: RunMode; userId?: 
     let pending = orders.filter((o) => o.kind === "entry" && OPEN.has(o.status) && o.filled_qty === 0);
     for (const p of pending) {
       const ageH = (now.getTime() - new Date(p.created_at).getTime()) / 3_600_000;
-      if (ageH <= RULES.staleEntryHours || !p.alpaca_order_id) continue;
+      if (ageH <= R.staleEntryHours || !p.alpaca_order_id) continue;
       if (mode !== "dry") {
-        await A.cancelOrder(p.alpaca_order_id).catch(() => undefined);
+        await A.cancelOrder(creds, p.alpaca_order_id).catch(() => undefined);
         await admin.from("ai_orders").update({ status: "canceled" }).eq("id", p.id);
         p.status = "canceled";
       }
@@ -275,8 +345,8 @@ export async function runAiTrader(opts: { admin: Admin; mode: RunMode; userId?: 
     // b) daily-loss halt
     const prev = prevEquity.get(b.id);
     const halted =
-      prev != null && equity < prev - RULES.dailyLossHaltPct * b.start_cash
-        ? `down $${round2(prev - equity)} since last close — no new entries (3% daily-loss halt)`
+      prev != null && equity < prev - R.dailyLossHaltPct * b.start_cash
+        ? `down $${round2(prev - equity)} since last close — no new entries (${+(R.dailyLossHaltPct * 100).toFixed(1)}% daily-loss halt)`
         : undefined;
 
     // c) rule-based exits (brackets handle stop/target on their own)
@@ -287,7 +357,7 @@ export async function runAiTrader(opts: { admin: Admin; mode: RunMode; userId?: 
         if (sig?.assessment === "OVERBOUGHT") why = `signal turned OVERBOUGHT${sig.tag ? ` · ${sig.tag}` : ""}`;
       } else {
         const days = (now.getTime() - new Date(pos.openedAt).getTime()) / 86_400_000;
-        if (days > RULES.freeMaxHoldDays) why = `time stop — held ${Math.round(days)} days`;
+        if (days > R.freeMaxHoldDays) why = `time stop — held ${Math.round(days)} days`;
       }
       if (!why) continue;
       if (orders.some((o) => o.kind === "exit" && o.symbol === pos.symbol && OPEN.has(o.status))) continue;
@@ -298,12 +368,12 @@ export async function runAiTrader(opts: { admin: Admin; mode: RunMode; userId?: 
     // d) new entries
     if (!halted) {
       const occupied = new Set([...st.positions.keys(), ...pending.map((p) => p.symbol)]);
-      const slots = RULES.maxPositions - st.positions.size - pending.length;
-      const wantN = Math.max(0, Math.min(slots, RULES.maxNewPerRun));
+      const slots = R.maxPositions - st.positions.size - pending.length;
+      const wantN = Math.max(0, Math.min(slots, R.maxNewPerRun));
       let placed = 0;
-      if (wantN === 0) decisions.push({ symbol: "—", action: "skip", reason: `book full (${RULES.maxPositions} positions/orders)` });
+      if (wantN === 0) decisions.push({ symbol: "—", action: "skip", reason: R.maxNewPerRun === 0 ? "new trades per run set to 0" : `book full (${R.maxPositions} positions/orders)` });
 
-      for (const c of wantN > 0 ? candidatesFor(b) : []) {
+      for (const c of wantN > 0 ? candidatesFor(b, R) : []) {
         if (placed >= wantN) break;
         if (occupied.has(c.symbol)) continue;
         const bars = barsBy[c.symbol];
@@ -312,19 +382,19 @@ export async function runAiTrader(opts: { admin: Admin; mode: RunMode; userId?: 
           decisions.push({ symbol: c.symbol, action: "skip", reason: "not enough price history" });
           continue;
         }
-        if (ref < RULES.minPrice) {
-          decisions.push({ symbol: c.symbol, action: "skip", reason: `price under $${RULES.minPrice}` });
+        if (ref < R.minPrice) {
+          decisions.push({ symbol: c.symbol, action: "skip", reason: `price under $${R.minPrice}` });
           continue;
         }
-        const br = bracket(ref, atr(bars));
-        const sz = sizeQty({ equity, available, price: br.limit, riskPerShare: br.riskPerShare });
+        const br = bracket(ref, atr(bars), R);
+        const sz = sizeQty({ equity, available, price: br.limit, riskPerShare: br.riskPerShare }, R);
         if (!sz.qty) {
           decisions.push({ symbol: c.symbol, action: "skip", reason: `${c.reason} — ${sz.why}` });
           continue;
         }
         if (mode !== "dry") {
           const clientId = `stk-${b.key}-e-${c.symbol}-${now.getTime()}`;
-          const o = await A.submitOrder({
+          const o = await A.submitOrder(creds, {
             symbol: c.symbol,
             qty: String(sz.qty),
             side: "buy",
@@ -376,12 +446,12 @@ export async function runAiTrader(opts: { admin: Admin; mode: RunMode; userId?: 
     };
   }
 
-  function candidatesFor(b: BookRow): Candidate[] {
+  function candidatesFor(b: BookRow, R: Rules): Candidate[] {
     const list = listOf.get(b.user_id) ?? [];
     if (b.key === "mylist") {
       return list
         .map((sym) => ({ sym, sig: sigBy.get(sym) }))
-        .filter(({ sig }) => (sig?.assessment === "BUY" || sig?.assessment === "WASHOUT") && (sig?.score ?? 0) >= 60)
+        .filter(({ sig }) => (sig?.assessment === "BUY" || sig?.assessment === "WASHOUT") && (sig?.score ?? 0) >= R.minScore)
         .sort((x, y) => (y.sig?.score ?? 0) - (x.sig?.score ?? 0))
         .map(({ sym, sig }) => ({
           symbol: sym,
@@ -408,14 +478,14 @@ export async function runAiTrader(opts: { admin: Admin; mode: RunMode; userId?: 
       .filter((o) => o.kind === "entry" && o.symbol === symbol)
       .flatMap((o) => o.leg_ids ?? [])
       .filter((id) => OPEN.has(remoteById.get(id)?.status ?? ""));
-    for (const id of legIds) await A.cancelOrder(id).catch(() => undefined);
+    for (const id of legIds) await A.cancelOrder(creds, id).catch(() => undefined);
     for (let i = 0; i < 6 && legIds.length; i++) {
-      const states = await Promise.all(legIds.map((id) => A.getOrder(id).then((o) => o.status).catch(() => "canceled")));
+      const states = await Promise.all(legIds.map((id) => A.getOrder(creds, id).then((o) => o.status).catch(() => "canceled")));
       if (states.every((s) => !OPEN.has(s) && s !== "pending_cancel")) break;
       await sleep(500);
     }
     const clientId = `stk-${b.key}-x-${symbol}-${now.getTime()}`;
-    const o = await A.submitOrder({
+    const o = await A.submitOrder(creds, {
       symbol, qty: String(qty), side: "sell", type: "market", time_in_force: "day", client_order_id: clientId,
     });
     await admin.from("ai_orders").insert({

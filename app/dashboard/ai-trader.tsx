@@ -3,34 +3,12 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { runAiTrader } from "../actions";
-import { money, moneySigned, pct, price as fprice, shares } from "@/lib/portfolio";
-import type { AiBookView, AiView } from "@/lib/aitrader/view";
-import type { Decision } from "@/lib/aitrader/engine";
-
-const LABEL = "text-[10px] font-semibold uppercase tracking-wider text-faint";
-
-const BLURB: Record<AiBookView["key"], string> = {
-  mylist: "Rules only, no AI. Your watchlist on Stocky BUY / WASHOUT (score ≥ 60); exits on OVERBOUGHT or its stop / target.",
-  free: "Rules only, no AI. The skill's chart patterns across ~140 large caps in an uptrend; 21-day time stop.",
-  "claude-mylist":
-    "Claude Sonnet runs the day-trader-skill repo on your watchlist: scans, reads the news, times entries, flat by 3:55 pm. On your Mac, every 15 min.",
-  "claude-free":
-    "Claude Sonnet runs the day-trader-skill repo across ~5,900 US stocks: free choice, reads the news, flat by 3:55 pm. On your Mac, every 15 min.",
-};
-
-function col(v: number | null | undefined) {
-  if (v == null || Math.abs(v) < 0.005) return "text-dim";
-  return v > 0 ? "text-gain" : "text-loss";
-}
-
-function when(iso: string) {
-  return new Date(iso).toLocaleString(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
-}
+import { money, moneySigned, pct } from "@/lib/portfolio";
+import { RUNNER_LIMITS } from "@/lib/aitrader/limits";
+import type { AiView } from "@/lib/aitrader/view";
+import { LABEL } from "./ai-run";
+import { BookCard, col } from "./ai-book";
+import { ConnectCard, RunnerCard } from "./ai-settings";
 
 export default function AiTrader({ ai }: { ai: AiView | null }) {
   const [msg, setMsg] = useState<{ text: string; err?: boolean } | null>(null);
@@ -56,6 +34,7 @@ export default function AiTrader({ ai }: { ai: AiView | null }) {
   }
 
   const total = ai.books.reduce((a, b) => a + b.equity, 0);
+  const weekCost = ai.books.reduce((a, b) => a + b.weekCostUsd, 0);
   const startTotal = ai.books.reduce((a, b) => a + b.startCash, 0);
 
   return (
@@ -74,8 +53,9 @@ export default function AiTrader({ ai }: { ai: AiView | null }) {
             <h2 className="mt-1.5 font-display text-xl font-semibold text-text">AI Trader</h2>
             <p className="mt-0.5 text-xs text-dim">
               Four $5,000 paper books: <b>Rules</b> (fixed code, runs on the website after the US close) next to{" "}
-              <b>Claude</b> (Claude Sonnet running the day-trader-skill repo on your Mac during market hours). Same
-              money, same account — compare them side by side.
+              <b>Claude</b> (Claude Sonnet running the day-trader-skill repo on your Mac during market hours). Open
+              any Claude run to see every step: what the repo&apos;s scanner, news, entry, exit, time-machine, budget,
+              risk and broker stages said, and what Claude did with it.
             </p>
           </div>
           <div className="flex shrink-0 gap-2">
@@ -104,11 +84,10 @@ export default function AiTrader({ ai }: { ai: AiView | null }) {
           <div className={`font-mono text-sm tnum ${col(total - startTotal)}`}>
             {moneySigned(total - startTotal, 2)} ({pct((total / startTotal - 1) * 100)}) vs {money(startTotal)}
           </div>
-          {ai.accountEquity != null && (
-            <div className="ml-auto text-right font-mono text-xs text-faint tnum">
-              paper account equity {money(ai.accountEquity, 2)}
-            </div>
-          )}
+          <div className="ml-auto text-right font-mono text-xs text-faint tnum">
+            {ai.accountEquity != null && <div>paper account equity {money(ai.accountEquity, 2)}</div>}
+            <div>{ai.prices === "live" ? "live prices" : "prices as of the Mac's last Claude run"}</div>
+          </div>
         </div>
 
         {msg && (
@@ -117,6 +96,11 @@ export default function AiTrader({ ai }: { ai: AiView | null }) {
           </p>
         )}
         {ai.error && <p className="mt-3 rounded-md bg-loss/10 px-3 py-2 text-xs text-loss">{ai.error}</p>}
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-2">
+        <ConnectCard connection={ai.connection} />
+        <RunnerCard defs={RUNNER_LIMITS} saved={ai.runner} weekCost={weekCost} />
       </div>
 
       <div className="grid gap-4 lg:grid-cols-2">
@@ -131,167 +115,5 @@ export default function AiTrader({ ai }: { ai: AiView | null }) {
         investment advice; past or simulated results don&apos;t predict future returns.
       </p>
     </section>
-  );
-}
-
-function BookCard({ b }: { b: AiBookView }) {
-  const run = b.lastRun;
-  const decisions: Decision[] = run?.summary?.decisions ?? [];
-  return (
-    <div className="card overflow-hidden rounded-2xl border border-border bg-surface">
-      <div className="border-b border-border p-4">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <div className="font-display text-lg font-semibold text-text">{b.name}</div>
-            <p className="mt-0.5 text-xs text-dim">{BLURB[b.key]}</p>
-          </div>
-          <Spark series={b.series} />
-        </div>
-        <div className="mt-3 flex flex-wrap items-end justify-between gap-3">
-          <div>
-            <div className={LABEL}>Equity</div>
-            <div className="font-display text-3xl font-semibold text-text tnum">{money(b.equity, 2)}</div>
-            <div className={`font-mono text-sm tnum ${col(b.pnl)}`}>
-              {moneySigned(b.pnl, 2)} ({pct(b.pnlPct)})
-            </div>
-          </div>
-          <dl className="grid grid-cols-[auto_auto] gap-x-4 gap-y-0.5 text-right text-xs">
-            <dt className="text-faint">Cash</dt>
-            <dd className="font-mono text-text tnum">{money(b.cash, 2)}</dd>
-            <dt className="text-faint">Realized</dt>
-            <dd className={`font-mono tnum ${col(b.realized)}`}>{moneySigned(b.realized, 2)}</dd>
-            <dt className="text-faint">Win rate</dt>
-            <dd className="font-mono text-text tnum">
-              {b.closedTrades ? `${Math.round((b.wins / b.closedTrades) * 100)}% of ${b.closedTrades}` : "—"}
-            </dd>
-          </dl>
-        </div>
-      </div>
-
-      <div className="space-y-4 p-4">
-        <div>
-          <div className={`mb-1 ${LABEL}`}>Positions ({b.positions.length})</div>
-          {b.positions.length === 0 ? (
-            <p className="text-sm text-dim">No positions yet.</p>
-          ) : (
-            b.positions.map((p) => (
-              <div key={p.symbol} className="flex items-center justify-between gap-3 border-t border-border py-2 first:border-t-0">
-                <div className="min-w-0">
-                  <div className="font-display font-semibold text-text">{p.symbol}</div>
-                  <div className="font-mono text-xs text-faint tnum">
-                    {shares(p.qty)} @ ${fprice(p.avgCost)}
-                    {p.stop != null && ` · stop ${fprice(p.stop)}`}
-                    {p.target != null && ` · target ${fprice(p.target)}`}
-                  </div>
-                  {p.reason && <div className="truncate text-[11px] text-dim">{p.reason}</div>}
-                </div>
-                <div className="shrink-0 text-right">
-                  <div className="font-mono text-sm text-text tnum">{p.price != null ? `$${fprice(p.price)}` : "—"}</div>
-                  <div className={`font-mono text-xs tnum ${col(p.pnl)}`}>
-                    {moneySigned(p.pnl, 2)} · {pct(p.pnlPct)}
-                  </div>
-                </div>
-              </div>
-            ))
-          )}
-        </div>
-
-        {b.pending.length > 0 && (
-          <div>
-            <div className={`mb-1 ${LABEL}`}>Working orders ({b.pending.length})</div>
-            {b.pending.map((o, i) => (
-              <div key={i} className="border-t border-border py-1.5 font-mono text-xs text-dim tnum first:border-t-0">
-                <span className={o.side === "buy" ? "text-gain" : "text-loss"}>{o.side.toUpperCase()}</span>{" "}
-                <span className="font-semibold text-text">{shares(o.qty)} {o.symbol}</span>
-                {o.limit != null && ` limit $${fprice(o.limit)}`}
-                {o.stop != null && ` · stop ${fprice(o.stop)}`}
-                {o.target != null && ` · target ${fprice(o.target)}`}
-                <span className="text-faint"> · {o.kind === "entry" ? "waiting to fill" : "exit queued"}</span>
-              </div>
-            ))}
-          </div>
-        )}
-
-        <div className="rounded-lg border border-border bg-surface2/40 p-3">
-          <div className="flex items-center justify-between gap-3">
-            <span className={LABEL}>Last run</span>
-            <span className="font-mono text-xs text-dim">{run ? `${when(run.ran_at)} · ${run.mode}` : "not run yet"}</span>
-          </div>
-          {run?.summary?.usage?.cost_usd != null && (
-            <p className="mt-1 font-mono text-[11px] text-faint tnum">
-              Claude: {run.summary.usage.turns ?? "?"} turns · {Math.round(run.summary.usage.secs ?? 0)}s · ≈$
-              {Number(run.summary.usage.cost_usd).toFixed(2)} of usage
-            </p>
-          )}
-          {(run?.mode === "dry" || run?.mode === "claude-dry") && (
-            <p className="mt-1 text-[11px] text-watch">Dry run — these decisions were made, nothing was placed.</p>
-          )}
-          {run?.error && <p className="mt-2 text-xs text-loss">{run.error}</p>}
-          {run?.summary?.halted && <p className="mt-2 text-xs text-watch">{run.summary.halted}</p>}
-          {run?.summary?.note && <p className="mt-2 text-xs text-dim">{run.summary.note}</p>}
-          {decisions.length > 0 && (
-            <ul className="mt-2 space-y-1">
-              {decisions.slice(0, 10).map((d, i) => (
-                <li key={i} className="flex gap-2 text-xs">
-                  <ActionPill a={d.action} />
-                  <span className="min-w-0">
-                    <span className="font-semibold text-text">{d.symbol}</span>
-                    {d.qty != null && d.price != null && (
-                      <span className="font-mono text-dim tnum"> {shares(d.qty)} @ ${fprice(d.price)}</span>
-                    )}
-                    {d.stop != null && d.target != null && (
-                      <span className="font-mono text-faint tnum">
-                        {" "}
-                        (stop {fprice(d.stop)} / target {fprice(d.target)})
-                      </span>
-                    )}
-                    <span className="text-dim"> — {d.reason}</span>
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function ActionPill({ a }: { a: Decision["action"] }) {
-  const cls =
-    a === "buy"
-      ? "bg-gain/10 text-gain"
-      : a === "sell"
-        ? "bg-loss/10 text-loss"
-        : a === "cancel"
-          ? "bg-watch/10 text-watch"
-          : "bg-black/5 text-faint";
-  return (
-    <span className={`h-fit shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide ${cls}`}>
-      {a}
-    </span>
-  );
-}
-
-/** Tiny equity sparkline (needs ≥ 2 daily snapshots). */
-function Spark({ series }: { series: { as_of: string; equity: number }[] }) {
-  if (series.length < 2) return null;
-  const w = 96;
-  const h = 32;
-  const ys = series.map((s) => s.equity);
-  const lo = Math.min(...ys);
-  const hi = Math.max(...ys);
-  const pts = ys
-    .map((y, i) => {
-      const x = (i / (ys.length - 1)) * w;
-      const yy = hi === lo ? h / 2 : h - ((y - lo) / (hi - lo)) * h;
-      return `${x.toFixed(1)},${yy.toFixed(1)}`;
-    })
-    .join(" ");
-  const up = ys[ys.length - 1] >= ys[0];
-  return (
-    <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} className={`shrink-0 ${up ? "text-gain" : "text-loss"}`} aria-hidden>
-      <polyline points={pts} fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
-    </svg>
   );
 }

@@ -157,3 +157,60 @@ create policy "ai_equity owner read" on public.ai_equity for select
 -- Books are seeded per owner, e.g.:
 --   insert into public.ai_books (user_id, key, name, start_cash) values
 --     ('<uid>','mylist','My List',5000), ('<uid>','free','Free Choice',5000);
+
+-- ---------------------------------------------------------------------------
+-- AI Trader: per-box limits, runner settings, per-user Alpaca PAPER keys.
+-- Keys live encrypted in Supabase Vault (one secret per user), readable only by
+-- the service role through the functions below — never an env var, never sent
+-- to the browser. broker_connections only holds a hint ("PA…1234").
+-- ---------------------------------------------------------------------------
+alter table public.ai_books add column if not exists settings jsonb not null default '{}'::jsonb;
+
+create table if not exists public.ai_runner (
+  user_id    uuid primary key references auth.users (id) on delete cascade,
+  settings   jsonb not null default '{}'::jsonb, -- interval_min, weekly_cap_usd (read by the Mac's watcher)
+  updated_at timestamptz not null default now()
+);
+alter table public.ai_runner enable row level security;
+create policy "ai_runner owner read" on public.ai_runner for select using (auth.uid() = user_id);
+
+create table if not exists public.broker_connections (
+  user_id      uuid primary key references auth.users (id) on delete cascade,
+  account_hint text,
+  connected_at timestamptz not null default now()
+);
+alter table public.broker_connections enable row level security;
+create policy "broker_connections owner read" on public.broker_connections for select using (auth.uid() = user_id);
+
+create or replace function public.set_alpaca_credentials(p_user uuid, p_key_id text, p_secret text)
+returns void language plpgsql security definer set search_path = public, vault as $$
+declare
+  v_name text := 'alpaca_paper:' || p_user::text;
+  v_id   uuid;
+  v_val  text := json_build_object('key_id', p_key_id, 'secret', p_secret)::text;
+begin
+  select id into v_id from vault.secrets where name = v_name;
+  if v_id is null then
+    perform vault.create_secret(v_val, v_name, 'Alpaca paper keys');
+  else
+    perform vault.update_secret(v_id, v_val);
+  end if;
+end $$;
+
+create or replace function public.get_alpaca_credentials(p_user uuid)
+returns jsonb language sql security definer set search_path = public, vault as $$
+  select decrypted_secret::jsonb from vault.decrypted_secrets
+  where name = 'alpaca_paper:' || p_user::text limit 1;
+$$;
+
+create or replace function public.remove_alpaca_credentials(p_user uuid)
+returns void language sql security definer set search_path = public, vault as $$
+  delete from vault.secrets where name = 'alpaca_paper:' || p_user::text;
+$$;
+
+revoke all on function public.set_alpaca_credentials(uuid, text, text) from public, anon, authenticated;
+revoke all on function public.get_alpaca_credentials(uuid) from public, anon, authenticated;
+revoke all on function public.remove_alpaca_credentials(uuid) from public, anon, authenticated;
+grant execute on function public.set_alpaca_credentials(uuid, text, text) to service_role;
+grant execute on function public.get_alpaca_credentials(uuid) to service_role;
+grant execute on function public.remove_alpaca_credentials(uuid) to service_role;

@@ -4,6 +4,9 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { computeSignalsForSymbols } from "@/lib/refresh";
 import { runAiTrader as runAiTraderEngine } from "@/lib/aitrader/engine";
+import { CLAUDE_LIMITS, RULES_LIMITS, RUNNER_LIMITS, validateLimits } from "@/lib/aitrader/limits";
+import type { AiRun } from "@/lib/aitrader/view";
+import { AlpacaError, getPaperAccount } from "@/lib/alpaca";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { randomBytes, createHash } from "node:crypto";
@@ -245,6 +248,9 @@ export async function runAiTrader(
     revalidatePath("/dashboard");
     const failed = res.filter((r) => r.error);
     if (failed.length) return { error: failed.map((r) => `${r.book}: ${r.error}`).join(" · ") };
+    if (res.length && res.every((r) => r.note?.startsWith("Alpaca paper account not connected"))) {
+      return { error: "Connect your Alpaca paper account first (card below)." };
+    }
     const n = (a: string) => res.reduce((k, r) => k + r.decisions.filter((d) => d.action === a).length, 0);
     const verb = mode === "dry" ? "Dry run (nothing placed)" : "Run complete";
     return { message: `${verb}: ${n("buy")} buy, ${n("sell")} sell, ${n("cancel")} cancel` };
@@ -253,3 +259,100 @@ export async function runAiTrader(
   }
 }
 
+
+/* ---------------- AI Trader: paper account + limits ---------------- */
+
+type Result = { message: string } | { error: string };
+
+/**
+ * Connect the user's own Alpaca PAPER account. The keys are checked against
+ * Alpaca (must be a PK… key on a PA… paper account), then stored encrypted in
+ * Supabase Vault under the user's id — never in an env var, never sent back to
+ * the browser. Only a hint ("PA…1234") is kept in a readable table.
+ */
+export async function connectAlpaca(formData: FormData): Promise<Result> {
+  const { user } = await uid();
+  if (!user) return { error: "not signed in" };
+  const keyId = String(formData.get("key_id") ?? "").trim();
+  const secret = String(formData.get("secret") ?? "").trim();
+  if (!/^PK[A-Z0-9]{10,40}$/.test(keyId)) return { error: "That isn't a paper key ID (paper keys start with PK)." };
+  if (secret.length < 20 || secret.length > 128 || /\s/.test(secret)) return { error: "That secret doesn't look right." };
+  let account: string;
+  try {
+    account = (await getPaperAccount({ keyId, secret })).account_number;
+  } catch (e) {
+    const msg = e instanceof AlpacaError && e.status === 401 ? "Alpaca rejected these keys." : e instanceof Error ? e.message : String(e);
+    return { error: msg };
+  }
+  const admin = createAdminClient();
+  const { error: vErr } = await admin.rpc("set_alpaca_credentials", { p_user: user.id, p_key_id: keyId, p_secret: secret });
+  if (vErr) return { error: `Couldn't store the keys: ${vErr.message}` };
+  const { error: cErr } = await admin
+    .from("broker_connections")
+    .upsert({ user_id: user.id, account_hint: `${account.slice(0, 2)}…${account.slice(-4)}`, connected_at: new Date().toISOString() });
+  if (cErr) return { error: cErr.message };
+  revalidatePath("/dashboard");
+  return { message: "Paper account connected." };
+}
+
+export async function disconnectAlpaca(): Promise<Result> {
+  const { user } = await uid();
+  if (!user) return { error: "not signed in" };
+  const admin = createAdminClient();
+  const { error: vErr } = await admin.rpc("remove_alpaca_credentials", { p_user: user.id });
+  if (vErr) return { error: vErr.message };
+  const { error } = await admin.from("broker_connections").delete().eq("user_id", user.id);
+  if (error) return { error: error.message };
+  revalidatePath("/dashboard");
+  return { message: "Disconnected — the keys were deleted." };
+}
+
+/** Save one box's limits (validated + clamped against the shared definitions). */
+export async function saveBookLimits(bookKey: string, values: Record<string, unknown>): Promise<Result> {
+  const { supabase, user } = await uid();
+  if (!user) return { error: "not signed in" };
+  // RLS: only finds the user's own book.
+  const { data: book } = await supabase.from("ai_books").select("id, key").eq("key", bookKey).maybeSingle();
+  if (!book) return { error: "no such book" };
+  const isClaude = String(book.key).startsWith("claude-");
+  const defs = isClaude
+    ? CLAUDE_LIMITS
+    : RULES_LIMITS.filter((d) => !d.only || d.only === book.key);
+  const v = validateLimits(defs, values);
+  if (!v.ok) return { error: v.errors.join(" · ") };
+  const { error } = await createAdminClient().from("ai_books").update({ settings: v.settings }).eq("id", book.id);
+  if (error) return { error: error.message };
+  revalidatePath("/dashboard");
+  return { message: isClaude ? "Saved — the Mac applies them before Claude's next run." : "Saved — used from the next run." };
+}
+
+/** Save how often Claude runs and the weekly usage cap (read by the Mac's watcher). */
+export async function saveRunnerSettings(values: Record<string, unknown>): Promise<Result> {
+  const { supabase, user } = await uid();
+  if (!user) return { error: "not signed in" };
+  const { data: books } = await supabase.from("ai_books").select("id").like("key", "claude-%");
+  if (!books?.length) return { error: "Claude books aren't enabled for this account" };
+  const v = validateLimits(RUNNER_LIMITS, values);
+  if (!v.ok) return { error: v.errors.join(" · ") };
+  const { error } = await createAdminClient()
+    .from("ai_runner")
+    .upsert({ user_id: user.id, settings: v.settings, updated_at: new Date().toISOString() });
+  if (error) return { error: error.message };
+  revalidatePath("/dashboard");
+  return { message: "Saved — the Mac picks it up within 5 minutes." };
+}
+
+/** One run in full (trace + pipeline), for the run timeline. */
+export async function loadRunDetail(runId: string): Promise<{ run: AiRun } | { error: string }> {
+  const { supabase, user } = await uid();
+  if (!user) return { error: "not signed in" };
+  // RLS: only the user's own books' runs.
+  const { data, error } = await supabase
+    .from("ai_runs")
+    .select("id, ran_at, mode, summary, error")
+    .eq("id", runId)
+    .maybeSingle();
+  if (error) return { error: error.message };
+  if (!data) return { error: "run not found" };
+  return { run: data as AiRun };
+}
