@@ -4,8 +4,9 @@ import { useState, useTransition } from "react";
 import { loadRunDetail } from "../actions";
 import { money, moneySigned, pct, price as fprice, shares } from "@/lib/portfolio";
 import { CLAUDE_LIMITS, defsForBook, effective, rulesDefs } from "@/lib/aitrader/limits";
-import type { AiBookView, AiRun, AiRunLite } from "@/lib/aitrader/view";
-import { LABEL, RunDetail, when } from "./ai-run";
+import type { AiBookView, AiReplayDay, AiRun, AiRunLite } from "@/lib/aitrader/view";
+import { LABEL, RunDetail, col, when } from "./ai-run";
+import { BacktestPanel } from "./ai-backtest";
 import { LimitsEditor } from "./ai-settings";
 
 const BLURB: Record<AiBookView["key"], string> = {
@@ -17,10 +18,7 @@ const BLURB: Record<AiBookView["key"], string> = {
     "Claude runs the day-trader-skill repo across the US market — free choice. Reads the news, times entries, within the limits below. On your Mac during market hours.",
 };
 
-export function col(v: number | null | undefined) {
-  if (v == null || Math.abs(v) < 0.005) return "text-dim";
-  return v > 0 ? "text-gain" : "text-loss";
-}
+export { col };
 
 /** "x of y" meter for one limit. */
 function Meter({ label, used, max, fmt }: { label: string; used: number | null; max: number; fmt: (n: number) => string }) {
@@ -116,12 +114,11 @@ function LimitsUsed({ b }: { b: AiBookView }) {
   );
 }
 
-/** Today's runs, newest first; open one to load its full trace + pipeline. */
-function Timeline({ runs, latestId }: { runs: AiRunLite[]; latestId: string | null }) {
+/** Open one run at a time; its full summary (trace + pipeline) is loaded on first open. */
+function useRunDetails() {
   const [openId, setOpenId] = useState<string | null>(null);
   const [detail, setDetail] = useState<Record<string, { run: AiRun } | { error: string }>>({});
   const [loading, start] = useTransition();
-  if (!runs.length) return null;
   function toggle(id: string) {
     if (openId === id) return setOpenId(null);
     setOpenId(id);
@@ -132,12 +129,24 @@ function Timeline({ runs, latestId }: { runs: AiRunLite[]; latestId: string | nu
       });
     }
   }
+  return { openId, detail, loading, toggle };
+}
+
+function LoadedRun({ d, loading }: { d: { run: AiRun } | { error: string } | undefined; loading: boolean }) {
+  if (!d || loading) return <p className="text-xs text-faint">Loading…</p>;
+  if (!("run" in d)) return <p className="text-xs text-loss">{d.error}</p>;
+  return <RunDetail s={d.run.summary} error={d.run.error} mode={d.run.mode} />;
+}
+
+/** Today's runs, newest first; open one to load its full trace + pipeline. */
+function Timeline({ runs, latestId }: { runs: AiRunLite[]; latestId: string | null }) {
+  const { openId, detail, loading, toggle } = useRunDetails();
+  if (!runs.length) return null;
   return (
     <div>
       <div className={`mb-1 ${LABEL}`}>Today&apos;s runs ({runs.length})</div>
       <ol className="divide-y divide-border rounded-lg border border-border">
         {runs.map((r) => {
-          const d = detail[r.id];
           return (
             <li key={r.id}>
               <button
@@ -159,19 +168,120 @@ function Timeline({ runs, latestId }: { runs: AiRunLite[]; latestId: string | nu
               </button>
               {openId === r.id && (
                 <div className="border-t border-border bg-surface2/30 p-3">
-                  {!d || loading ? (
-                    <p className="text-xs text-faint">Loading…</p>
-                  ) : !("run" in d) ? (
-                    <p className="text-xs text-loss">{d.error}</p>
-                  ) : (
-                    <RunDetail s={d.run.summary} error={d.run.error} mode={d.run.mode} />
-                  )}
+                  <LoadedRun d={detail[r.id]} loading={loading} />
                 </div>
               )}
             </li>
           );
         })}
       </ol>
+    </div>
+  );
+}
+
+/** One replayed day: simulated trades + positions, and its steps (each opens the full run). */
+function ReplayDay({ d }: { d: AiReplayDay }) {
+  const { openId, detail, loading, toggle } = useRunDetails();
+  const n = d.id.match(/-(\d+)$/)?.[1];
+  return (
+    <details className="group">
+      <summary className="flex cursor-pointer list-none items-start gap-2 px-2.5 py-1.5 text-xs hover:bg-surface2/60">
+        <span className="w-20 shrink-0 font-mono text-[11px] text-text tnum">
+          {d.date}
+          {n && n !== "1" ? <span className="text-faint"> #{n}</span> : null}
+        </span>
+        <span className="w-16 shrink-0 font-mono text-[10px] text-faint tnum">
+          {d.done}/{d.steps ?? "?"} {d.final ? "" : "· running"}
+        </span>
+        <span className={`min-w-0 flex-1 font-mono tnum ${col(d.simPnl)}`}>
+          {d.simPnl != null ? moneySigned(d.simPnl, 2) : "—"}
+          {d.simEquity != null && <span className="text-faint"> · {money(d.simEquity, 2)}</span>}
+        </span>
+        <span className="shrink-0 font-mono text-[10px] text-faint tnum">
+          {d.trades.length} fill{d.trades.length === 1 ? "" : "s"} · ${d.costUsd.toFixed(2)}
+        </span>
+      </summary>
+      <div className="space-y-3 border-t border-border bg-surface2/30 p-3">
+        <div>
+          <div className={`mb-1 ${LABEL}`}>Simulated fills ({d.trades.length})</div>
+          {d.trades.length === 0 ? (
+            <p className="text-xs text-dim">No fills.</p>
+          ) : (
+            <ul className="space-y-0.5">
+              {d.trades.map((t, i) => (
+                <li key={i} className="font-mono text-[11px] text-dim tnum">
+                  <span className="text-faint">{t.at ?? "—"}</span>{" "}
+                  <span className={t.side === "buy" ? "text-gain" : "text-loss"}>{String(t.side).toUpperCase()}</span>{" "}
+                  <span className="font-semibold text-text">
+                    {shares(t.qty)} {t.symbol}
+                  </span>{" "}
+                  @ ${fprice(t.price)}
+                  {t.why && <span className="font-sans text-faint"> — {t.why}</span>}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+        {d.positions.length > 0 && (
+          <div>
+            <div className={`mb-1 ${LABEL}`}>Simulated positions at the last step</div>
+            <ul className="space-y-0.5">
+              {d.positions.map((p) => (
+                <li key={p.symbol} className="font-mono text-[11px] text-dim tnum">
+                  <span className="font-semibold text-text">{p.symbol}</span> {shares(p.qty)} @ ${fprice(p.avg)} · mark ${fprice(p.mark)}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+        <div>
+          <div className={`mb-1 ${LABEL}`}>Steps ({d.list.length})</div>
+          <ol className="divide-y divide-border rounded-lg border border-border bg-surface">
+            {d.list.map((st) => (
+              <li key={st.id}>
+                <button
+                  onClick={() => toggle(st.id)}
+                  className="flex w-full items-start gap-2 px-2.5 py-1.5 text-left text-xs hover:bg-surface2/60"
+                >
+                  <span className="w-10 shrink-0 font-mono text-[11px] text-text tnum">{st.at ?? "—"}</span>
+                  <span className="w-16 shrink-0 font-mono text-[10px] uppercase text-faint">{st.phase ?? "—"}</span>
+                  <span className="min-w-0 flex-1 truncate text-dim">
+                    {st.error ? <span className="text-loss">{st.error}</span> : st.reason ?? ""}
+                  </span>
+                  <span className="shrink-0 font-mono text-[10px] text-faint tnum">
+                    {st.step != null && `#${st.step} `}
+                    {st.cost != null && `$${st.cost.toFixed(2)}`}
+                  </span>
+                </button>
+                {openId === st.id && (
+                  <div className="border-t border-border bg-surface2/30 p-3">
+                    <LoadedRun d={detail[st.id]} loading={loading} />
+                  </div>
+                )}
+              </li>
+            ))}
+          </ol>
+        </div>
+      </div>
+    </details>
+  );
+}
+
+/** Claude replays of past days (simulated on the Mac; never in this box's ledger). */
+function Replays({ days }: { days: AiReplayDay[] }) {
+  if (!days.length) return null;
+  return (
+    <div>
+      <div className={`mb-1 ${LABEL}`}>Replays ({days.length})</div>
+      <p className="mb-1.5 text-[10.5px] leading-snug text-faint">
+        Claude re-running past days at pinned times, fills simulated against 1-minute bars. Nothing was placed;
+        these never touch the positions or P&amp;L above. Their usage counts toward this week&apos;s total.
+      </p>
+      <div className="divide-y divide-border rounded-lg border border-border">
+        {days.map((d) => (
+          <ReplayDay key={d.id} d={d} />
+        ))}
+      </div>
     </div>
   );
 }
@@ -296,6 +406,8 @@ export function BookCard({ b }: { b: AiBookView }) {
 
         {isClaude && <Timeline runs={b.today} latestId={run?.id ?? null} />}
 
+        {isClaude && <Replays days={b.replays} />}
+
         <LimitsEditor
           bookKey={b.key}
           defs={defs}
@@ -306,6 +418,8 @@ export function BookCard({ b }: { b: AiBookView }) {
               : "Used by the rules engine from its next run. Book size sets this box's starting cash."
           }
         />
+
+        {!isClaude && <BacktestPanel bookKey={b.key} />}
       </div>
     </div>
   );

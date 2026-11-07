@@ -3,10 +3,21 @@
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { computeSignalsForSymbols } from "@/lib/refresh";
-import { runAiTrader as runAiTraderEngine } from "@/lib/aitrader/engine";
+import { loadCreds, runAiTrader as runAiTraderEngine } from "@/lib/aitrader/engine";
 import { RUNNER_LIMITS, defsForBook, effective, validateLimits } from "@/lib/aitrader/limits";
 import type { AiRun } from "@/lib/aitrader/view";
-import { AlpacaError, getPaperAccount } from "@/lib/alpaca";
+import { AlpacaError, getClock, getDailyBars, getPaperAccount, type Bar, type Creds } from "@/lib/alpaca";
+import { rulesFor } from "@/lib/aitrader/plan";
+import { freeUniverse } from "@/lib/aitrader/universe";
+import { etDate } from "@/lib/aitrader/decide";
+import {
+  historyStart,
+  isPeriod,
+  periodStart,
+  runBacktest as simulateBacktest,
+  type BacktestResult,
+  type Period,
+} from "@/lib/aitrader/backtest";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { randomBytes, createHash } from "node:crypto";
@@ -362,4 +373,75 @@ export async function loadRunDetail(runId: string): Promise<{ run: AiRun } | { e
   if (error) return { error: error.message };
   if (!data) return { error: "run not found" };
   return { run: data as AiRun };
+}
+
+
+/* ---------------- AI Trader: Rules backtest ---------------- */
+
+/** Daily bars for many symbols: chunks of 50 (getDailyBars pages each), a few chunks at a time. */
+async function barsFor(creds: Creds, symbols: string[], start: string): Promise<Record<string, Bar[]>> {
+  const chunks: string[][] = [];
+  for (let i = 0; i < symbols.length; i += 50) chunks.push(symbols.slice(i, i + 50));
+  const out: Record<string, Bar[]> = {};
+  for (let i = 0; i < chunks.length; i += 4) {
+    const pages = await Promise.all(chunks.slice(i, i + 4).map((c) => getDailyBars(creds, c, start)));
+    for (const p of pages) Object.assign(out, p);
+  }
+  return out;
+}
+
+/**
+ * Backtest a Rules box over daily bars (free — no Claude, nothing placed). Uses
+ * the box's saved limits, or `settingsOverride` (unsaved form values, validated
+ * like a save) to try them first. Market data comes from the user's own Alpaca
+ * paper keys.
+ */
+export async function runBacktest(
+  bookKey: string,
+  period: string,
+  settingsOverride?: Record<string, unknown>
+): Promise<{ result: BacktestResult; period: Period; source: "saved" | "form" } | { error: string }> {
+  const { supabase, user } = await uid();
+  if (!user) return { error: "not signed in" };
+  if (!isPeriod(period)) return { error: "unknown period" };
+  // RLS: only finds the user's own book.
+  const { data: book } = await supabase.from("ai_books").select("id, key, start_cash, settings").eq("key", bookKey).maybeSingle();
+  if (!book) return { error: "no such book" };
+  if (book.key !== "mylist" && book.key !== "free") return { error: "backtests are for the Rules boxes" };
+  const box = book.key as "mylist" | "free";
+
+  let settings: Record<string, unknown>;
+  if (settingsOverride) {
+    const v = validateLimits(defsForBook(box), settingsOverride);
+    if (!v.ok) return { error: v.errors.join(" · ") };
+    settings = v.settings;
+  } else {
+    // Book size is the box's start_cash (what the Limits form shows when no budget is saved).
+    settings = { budget: book.start_cash, ...((book.settings as Record<string, unknown> | null) ?? {}) };
+  }
+  const R = rulesFor(settings, box);
+
+  try {
+    const creds = await loadCreds(createAdminClient(), user.id);
+    if (!creds) return { error: "Connect your Alpaca paper account first (card above) — the backtest uses its market data." };
+
+    const { data: wl, error: wlErr } = await supabase.from("watchlist").select("symbol").eq("user_id", user.id);
+    if (wlErr) return { error: wlErr.message };
+    const list = Array.from(new Set((wl ?? []).map((r) => r.symbol as string)));
+    const symbols = box === "mylist" ? list : freeUniverse(list, R.universeAdd, R.universeRemove);
+    if (!symbols.length) return { error: box === "mylist" ? "Your list is empty — add tickers first." : "The universe is empty." };
+
+    const clock = await getClock(creds);
+    const today = etDate(new Date(clock.timestamp));
+    const start = periodStart(today, period);
+    const bars = await barsFor(creds, Array.from(new Set([...symbols, "SPY"])), historyStart(start));
+    if (clock.is_open) {
+      // Today's daily bar is still forming — completed sessions only.
+      for (const b of Object.values(bars)) if (b.length && etDate(new Date(b[b.length - 1].t)) === today) b.pop();
+    }
+    const result = simulateBacktest({ box, rules: R, bars, symbols, start, end: today });
+    return { result, period, source: settingsOverride ? "form" : "saved" };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
 }

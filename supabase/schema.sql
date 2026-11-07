@@ -128,7 +128,7 @@ create table if not exists public.ai_runs (
   id       uuid primary key default gen_random_uuid(),
   book_id  uuid not null references public.ai_books (id) on delete cascade,
   ran_at   timestamptz not null default now(),
-  mode     text not null check (mode in ('cron','manual','dry')),
+  mode     text not null check (mode in ('cron','manual','dry','claude','claude-dry','claude-replay')),
   summary  jsonb not null default '{}'::jsonb,
   error    text
 );

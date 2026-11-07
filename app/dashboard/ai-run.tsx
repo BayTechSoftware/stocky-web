@@ -5,6 +5,12 @@ import { price as fprice, shares } from "@/lib/portfolio";
 
 export const LABEL = "text-[10px] font-semibold uppercase tracking-wider text-faint";
 
+/** Gain / loss / flat text colour for a signed number. */
+export function col(v: number | null | undefined) {
+  if (v == null || Math.abs(v) < 0.005) return "text-dim";
+  return v > 0 ? "text-gain" : "text-loss";
+}
+
 /** The repo's chain, in the order it runs. */
 const STAGES: { key: string; name: string }[] = [
   { key: "scanner", name: "Scanner" },
@@ -206,6 +212,13 @@ export function RunDetail({ s, error, mode }: { s: RunSummary | null; error: str
       </div>
       {(mode === "dry" || mode === "claude-dry") && (
         <p className="text-[11px] text-watch">Dry run — these decisions were made, nothing was placed.</p>
+      )}
+      {mode === "claude-replay" && (
+        <p className="text-[11px] text-watch">
+          Replay{s?.replay ? ` of ${s.replay.date}${s.replay.at ? ` at ${s.replay.at} NY` : ""}` : ""}
+          {s?.replay?.step != null ? ` · step ${s.replay.step}/${s.replay.steps ?? "?"}` : ""} — fills simulated,
+          nothing was placed.
+        </p>
       )}
       {error && <p className="text-xs text-loss">{error}</p>}
       {s?.halted && <p className="text-xs text-watch">{s.halted}</p>}

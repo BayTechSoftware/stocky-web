@@ -20,18 +20,24 @@
 import type { createAdminClient } from "@/lib/supabase/admin";
 import * as A from "@/lib/alpaca";
 import { bookState } from "./ledger";
-import {
-  anchorToFill,
-  bracket,
-  entryOrderBody,
-  isStaleEntry,
-  reservedCash,
-  rulesFor,
-  sizeQty,
-  type Rules,
-} from "./plan";
+import { anchorToFill, entryOrderBody, isStaleEntry, reservedCash, rulesFor, type Rules } from "./plan";
 import { freeUniverse } from "./universe";
-import { atr, rankCandidates, scoreCandidate, type Candidate } from "./setups";
+import { atr, type Candidate } from "./setups";
+import {
+  HISTORY_DAYS,
+  barsAsOf,
+  entrySlots,
+  etDate,
+  exitReason,
+  freeCandidates,
+  haltReason,
+  keepLegReason,
+  mylistCandidates,
+  planEntry,
+} from "./decide";
+
+// Kept exported from here for existing importers; the pure logic lives in ./decide.
+export { etDate, barsAsOf, signalAgeDays, STALE_SIGNAL_DAYS } from "./decide";
 
 type Admin = ReturnType<typeof createAdminClient>;
 export type RunMode = "cron" | "manual" | "dry";
@@ -104,9 +110,37 @@ export interface RunUsage {
   weekly_cap_usd?: number | null;
 }
 
+/** A simulated fill in a Claude replay (against 1-min bars, on the Mac). */
+export interface ReplaySimTrade {
+  at?: string; // HH:MM NY
+  symbol: string;
+  side: string;
+  qty: number;
+  price: number;
+  why?: string;
+}
+
+/** `summary.replay` on a "claude-replay" run (SETTINGS_CONTRACT.md → Replay runs). */
+export interface ReplayInfo {
+  id: string; // "<book>-<YYYY-MM-DD>-<n>"
+  date: string;
+  at?: string; // pinned NY time of this step, HH:MM
+  final?: boolean;
+  step?: number;
+  steps?: number;
+  sim_trades?: ReplaySimTrade[]; // cumulative for the day
+  sim_positions?: { symbol: string; qty: number; avg: number | null; mark: number | null }[];
+  sim_cash?: number;
+  sim_equity?: number;
+  sim_pnl?: number;
+  start_cash?: number;
+  cost_usd_total?: number;
+}
+
 export interface RunSummary {
   book: string;
-  mode: RunMode | "claude" | "claude-dry";
+  mode: RunMode | "claude" | "claude-dry" | "claude-replay";
+  replay?: ReplayInfo;
   phase?: string;
   reason?: string;
   usage?: RunUsage;
@@ -137,16 +171,6 @@ export interface RunSummary {
 
 /** Statuses of an order that can still fill. */
 const OPEN = new Set(["new", "accepted", "pending_new", "partially_filled", "held", "accepted_for_bidding"]);
-
-/** YYYY-MM-DD in New York time. */
-export function etDate(d: Date = new Date()): string {
-  return new Intl.DateTimeFormat("en-CA", {
-    timeZone: "America/New_York",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(d);
-}
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const round2 = (v: number) => Math.round(v * 100) / 100;
@@ -292,7 +316,7 @@ async function runForUser(admin: Admin, mode: RunMode, books: BookRow[], creds: 
   for (const o of ours) wanted.add(o.symbol);
   const symbols = Array.from(wanted);
 
-  const barsBy = await A.getDailyBars(creds, symbols, etDate(new Date(now.getTime() - 420 * 86_400_000)));
+  const barsBy = await A.getDailyBars(creds, symbols, etDate(new Date(now.getTime() - HISTORY_DAYS * 86_400_000)));
   if (clock.is_open) {
     // Today's daily bar is still forming — use completed sessions for signals.
     for (const bars of Object.values(barsBy)) {
@@ -404,23 +428,12 @@ async function runForUser(admin: Admin, mode: RunMode, books: BookRow[], creds: 
       }
 
       /* c) daily-loss halt: vs the previous snapshot's equity */
-      const prev = prevEquity.get(b.id);
-      if (R.dailyLossHaltPct > 0 && prev != null && prev > 0 && equity < prev * (1 - R.dailyLossHaltPct)) {
-        halted = `down $${round2(prev - equity)} (${((1 - equity / prev) * 100).toFixed(1)}%) since the last snapshot — no new entries (${+(R.dailyLossHaltPct * 100).toFixed(2)}% daily-loss halt)`;
-      }
+      halted = haltReason(equity, prevEquity.get(b.id), R);
 
       /* d) rule-based exits (the attached stop / target handle themselves) */
       const exited = new Set<string>();
       for (const pos of st.positions.values()) {
-        let why: string | undefined;
-        if (b.key === "mylist" && R.exitOnOverbought) {
-          const sig = sigBy.get(pos.symbol);
-          if (sig?.assessment === "OVERBOUGHT") why = `signal turned OVERBOUGHT${sig.tag ? ` · ${sig.tag}` : ""}`;
-        }
-        if (!why && R.maxHoldDays > 0) {
-          const days = (now.getTime() - new Date(pos.openedAt).getTime()) / 86_400_000;
-          if (days > R.maxHoldDays) why = `time stop — held ${Math.round(days)} days (max ${R.maxHoldDays})`;
-        }
+        const why = exitReason({ mylist: b.key === "mylist", R, sig: sigBy.get(pos.symbol), openedAt: pos.openedAt, now });
         if (!why) continue;
         if (orders.some((o) => o.kind === "exit" && o.stop_price == null && o.symbol === pos.symbol && OPEN.has(o.status))) continue;
         if (!dry) {
@@ -440,16 +453,9 @@ async function runForUser(admin: Admin, mode: RunMode, books: BookRow[], creds: 
       /* f) new entries */
       if (!halted) {
         const occupied = new Set([...st.positions.keys(), ...working.map((p) => p.symbol)]);
-        const slots = R.maxPositions - occupied.size;
-        const wantN = Math.max(0, Math.min(slots, R.maxNewPerRun));
+        const { wantN, skip: noSlots } = entrySlots(R, occupied.size);
         let placed = 0;
-        if (wantN === 0) {
-          decisions.push({
-            symbol: "—",
-            action: "skip",
-            reason: R.maxNewPerRun === 0 ? "new trades per run set to 0" : `book full (${R.maxPositions} positions/orders)`,
-          });
-        }
+        if (noSlots) decisions.push({ symbol: "—", action: "skip", reason: noSlots });
 
         const { list: cands, stale } = wantN > 0 ? candidatesFor(b, R) : { list: [], stale: [] };
         for (const s of stale) decisions.push({ symbol: s.symbol, action: "skip", reason: `signal is ${s.days} days old` });
@@ -460,32 +466,23 @@ async function runForUser(admin: Admin, mode: RunMode, books: BookRow[], creds: 
         for (const c of cands) {
           if (placed >= wantN) break;
           if (occupied.has(c.symbol)) continue;
-          const bars = barsBy[c.symbol];
           const ref = priceOf(c.symbol);
-          if (!bars || bars.length < 30 || ref == null) {
-            decisions.push({ symbol: c.symbol, action: "skip", reason: "not enough price history" });
+          const plan = planEntry(c, barsBy[c.symbol], ref, R, equity, available);
+          if (!plan.ok) {
+            decisions.push({ symbol: c.symbol, action: "skip", reason: plan.reason });
             continue;
           }
-          if (ref < R.minPrice) {
-            decisions.push({ symbol: c.symbol, action: "skip", reason: `price under $${R.minPrice}` });
-            continue;
-          }
-          const br = bracket(ref, atr(bars), R);
-          const sz = sizeQty({ equity, available, price: br.limit, riskPerShare: br.riskPerShare }, R);
-          if (!sz.qty) {
-            decisions.push({ symbol: c.symbol, action: "skip", reason: `${c.reason} — ${sz.why}` });
-            continue;
-          }
+          const { br, qty } = plan;
           if (!dry) {
             const clientId = `stk-${b.key}-e-${c.symbol}-${now.getTime()}`;
-            const o = await attempt(c.symbol, () => A.submitOrder(creds, entryOrderBody(c.symbol, sz.qty, br, clientId)));
+            const o = await attempt(c.symbol, () => A.submitOrder(creds, entryOrderBody(c.symbol, qty, br, clientId)));
             if (!o) continue;
             const { error } = await admin.from("ai_orders").insert({
               book_id: b.id,
               symbol: c.symbol,
               side: "buy",
               kind: "entry",
-              qty: sz.qty,
+              qty,
               ref_price: ref,
               limit_price: br.limit,
               stop_price: br.stop,
@@ -498,17 +495,17 @@ async function runForUser(admin: Admin, mode: RunMode, books: BookRow[], creds: 
             });
             if (error) notes.push(`${c.symbol}: order ${o.id} placed but not recorded (${error.message}) — check Alpaca.`);
           }
-          available -= sz.qty * br.limit;
+          available -= qty * br.limit;
           occupied.add(c.symbol);
           placed++;
           decisions.push({
             symbol: c.symbol,
             action: "buy",
-            qty: sz.qty,
+            qty,
             price: br.limit,
             stop: br.stop,
             target: br.target ?? undefined,
-            reason: br.target == null ? `${c.reason} · stop only` : c.reason,
+            reason: plan.reason,
           });
         }
         if (wantN > 0 && placed === 0 && !decisions.some((d) => d.action === "skip")) {
@@ -561,12 +558,9 @@ async function runForUser(admin: Admin, mode: RunMode, books: BookRow[], creds: 
           decisions.push({ symbol: o.symbol, action: "hold", reason: `stop-only (OTO) legs can't be replaced at Alpaca — ${what} stays at ${cur.toFixed(2)} (from the fill it would be ${next.toFixed(2)})` });
           continue;
         }
-        if (isStop && px != null && next >= px) {
-          decisions.push({ symbol: o.symbol, action: "hold", reason: `kept stop at ${cur.toFixed(2)} — from the fill it would be ${next.toFixed(2)}, at/above the price ${px.toFixed(2)}` });
-          continue;
-        }
-        if (!isStop && px != null && next <= px) {
-          decisions.push({ symbol: o.symbol, action: "hold", reason: `kept target at ${cur.toFixed(2)} — from the fill it would be ${next.toFixed(2)}, at/below the price ${px.toFixed(2)}` });
+        const kept = keepLegReason(isStop, cur, next, px);
+        if (kept) {
+          decisions.push({ symbol: o.symbol, action: "hold", reason: kept });
           continue;
         }
         if (!dry) {
@@ -681,40 +675,8 @@ async function runForUser(admin: Admin, mode: RunMode, books: BookRow[], creds: 
   }
 
   function candidatesFor(b: BookRow, R: Rules): { list: Candidate[]; stale: { symbol: string; days: number }[] } {
-    const list = listOf.get(b.user_id) ?? [];
-    if (b.key === "mylist") {
-      const ok = new Set(["BUY", "WASHOUT", ...(R.enterOnWatch ? ["WATCH"] : [])]);
-      const stale: { symbol: string; days: number }[] = [];
-      const picks = list
-        .map((sym) => ({ sym, sig: sigBy.get(sym) }))
-        .filter(({ sig }) => ok.has(String(sig?.assessment)) && (sig?.score ?? 0) >= R.minScore)
-        .filter(({ sym, sig }) => {
-          const days = signalAgeDays(sig?.updated_at as string | undefined, today);
-          if (days != null && days > STALE_SIGNAL_DAYS) {
-            stale.push({ symbol: sym, days });
-            return false;
-          }
-          return true;
-        })
-        .sort((x, y) => (y.sig?.score ?? 0) - (x.sig?.score ?? 0))
-        .map(({ sym, sig }) => ({
-          symbol: sym,
-          setups: [],
-          score: sig?.score ?? 0,
-          ret20: 0,
-          rsi: null,
-          reason: `Stocky ${sig?.assessment}${sig?.tag ? ` · ${sig.tag}` : ""} · score ${sig?.score}`,
-        }));
-      return { list: picks, stale };
-    }
-    const cs: Candidate[] = [];
-    for (const sym of universeOf(b)) {
-      const bars = barsBy[sym];
-      if (!bars || bars.length < 60) continue;
-      const c = scoreCandidate(sym, bars.map((x) => x.c), { maxRsi: R.maxRsi, uptrendOnly: R.uptrendOnly });
-      if (c) cs.push(c);
-    }
-    return { list: rankCandidates(cs), stale: [] };
+    if (b.key === "mylist") return mylistCandidates(listOf.get(b.user_id) ?? [], (s) => sigBy.get(s), R, today);
+    return { list: freeCandidates(universeOf(b), (s) => barsBy[s], R), stale: [] };
   }
 
   /** Cancel the position's open stop/target legs and our own stops, then sell it at market (queues if closed). */
@@ -747,21 +709,4 @@ const LIVE = new Set([...OPEN, "pending_replace"]);
 /** Time of the latest fill of `symbol` in the ledger. */
 function lastFillAt(fills: { symbol: string; transacted_at: string }[], symbol: string): string {
   return fills.filter((f) => f.symbol === symbol).reduce((m, f) => (f.transacted_at > m ? f.transacted_at : m), "");
-}
-
-/** Signals older than this many calendar days aren't entered on (exits still use them). */
-export const STALE_SIGNAL_DAYS = 3;
-
-/** Whole calendar days (NY) between a timestamp and `today` (YYYY-MM-DD), or null if unknown. */
-export function signalAgeDays(updatedAt: string | null | undefined, today: string): number | null {
-  if (!updatedAt) return null;
-  const t = Date.parse(updatedAt);
-  if (!Number.isFinite(t)) return null;
-  return Math.round((Date.parse(today) - Date.parse(etDate(new Date(t)))) / 86_400_000);
-}
-
-/** Daily bars whose session had closed when `atIso` happened (bar t = session date at midnight NY; close ≈ +16 h). */
-export function barsAsOf(bars: A.Bar[], atIso: string): A.Bar[] {
-  const at = Date.parse(atIso);
-  return bars.filter((x) => Date.parse(x.t) + 16 * 3_600_000 <= at);
 }

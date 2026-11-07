@@ -8,7 +8,10 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { createAdminClient } from "@/lib/supabase/admin";
 import * as A from "@/lib/alpaca";
 import { bookState } from "./ledger";
-import { loadCreds, type RunSummary, type RunUsage } from "./engine";
+import { loadCreds, type ReplayInfo, type RunSummary, type RunUsage } from "./engine";
+import { groupReplays, type AiReplayDay } from "./replays";
+
+export type { AiReplayDay, AiReplayStep } from "./replays";
 
 export interface AiPositionView {
   symbol: string;
@@ -55,8 +58,10 @@ export interface AiBookView {
   positions: AiPositionView[];
   pending: AiOrderView[];
   lastRun: AiRun | null;
-  /** Today's runs (NY day), newest first, without the heavy trace — open one to load it. */
+  /** Today's runs (NY day), newest first, without the heavy trace — open one to load it. Replays excluded. */
   today: AiRunLite[];
+  /** Claude replay days (mode "claude-replay"), newest first — simulated, never in the ledger. */
+  replays: AiReplayDay[];
   /** This box's saved limits (validated on save; defaults apply where missing). */
   settings: Record<string, number | string>;
   weekCostUsd: number;
@@ -129,7 +134,7 @@ export async function loadAiView(
   const ids = books.map((b) => b.id as string);
   const claudeIds = books.filter((b) => String(b.key).startsWith("claude-")).map((b) => b.id as string);
 
-  const [fillsR, ordersR, eqR, todayR, weekR, connR, runnerR, ...latestR] = await Promise.all([
+  const [fillsR, ordersR, eqR, todayR, weekR, replayR, connR, runnerR, ...latestR] = await Promise.all([
     supabase.from("ai_fills").select("book_id, symbol, side, qty, price, transacted_at").in("book_id", ids),
     supabase
       .from("ai_orders")
@@ -146,6 +151,7 @@ export async function loadAiView(
             "id, book_id, ran_at, mode, error, phase:summary->>phase, reason:summary->>reason, note:summary->>note, usage:summary->usage, decisions:summary->decisions"
           )
           .in("book_id", claudeIds)
+          .neq("mode", "claude-replay")
           .gte("ran_at", nyMidnight())
           .order("ran_at", { ascending: false })
           .limit(200)
@@ -158,14 +164,25 @@ export async function loadAiView(
           .gte("ran_at", nyMidnight(nyWeekday()))
           .limit(2000)
       : Promise.resolve({ data: [] as Record<string, unknown>[] }),
+    // Replay steps, light fields only (the replay block, not the trace); weekly usage above includes them.
+    claudeIds.length
+      ? supabase
+          .from("ai_runs")
+          .select("id, book_id, ran_at, error, phase:summary->>phase, reason:summary->>reason, cost:summary->usage->cost_usd, replay:summary->replay")
+          .in("book_id", claudeIds)
+          .eq("mode", "claude-replay")
+          .order("ran_at", { ascending: false })
+          .limit(600)
+      : Promise.resolve({ data: [] as Record<string, unknown>[] }),
     supabase.from("broker_connections").select("account_hint, connected_at").maybeSingle(),
     supabase.from("ai_runner").select("settings").maybeSingle(),
-    // Each box's latest run in full.
+    // Each box's latest real run in full (replays never count as the latest run).
     ...ids.map((id) =>
       supabase
         .from("ai_runs")
         .select("id, book_id, ran_at, mode, summary, error")
         .eq("book_id", id)
+        .neq("mode", "claude-replay")
         .order("ran_at", { ascending: false })
         .limit(1)
         .maybeSingle()
@@ -305,6 +322,19 @@ export async function loadAiView(
       pending,
       lastRun: run,
       today,
+      replays: groupReplays(
+        ((replayR.data ?? []) as Record<string, unknown>[])
+          .filter((r) => r.book_id === b.id)
+          .map((r) => ({
+            id: r.id as string,
+            ran_at: r.ran_at as string,
+            error: (r.error as string | null) ?? null,
+            phase: (r.phase as string | null) ?? null,
+            reason: (r.reason as string | null) ?? null,
+            cost: r.cost,
+            replay: (r.replay as ReplayInfo | null) ?? null,
+          }))
+      ).slice(0, 30),
       settings: (b.settings as Record<string, number | string> | null) ?? {},
       weekCostUsd: weekCost.get(b.id as string) ?? 0,
       series: eq.filter((e) => e.book_id === b.id).map((e) => ({ as_of: e.as_of as string, equity: e.equity as number })),

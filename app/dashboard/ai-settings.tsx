@@ -180,9 +180,13 @@ function Fields({ defs, values }: { defs: LimitDef[]; values: Settings }) {
   );
 }
 
-function formValues(form: HTMLFormElement): Record<string, string> {
+/** A settings form's current (possibly unsaved) values, as the server actions expect them. */
+export function formValues(form: HTMLFormElement): Record<string, string> {
   return Object.fromEntries(Array.from(new FormData(form).entries()).map(([k, v]) => [k, String(v)]));
 }
+
+/** DOM id of a box's limits form (the backtest reads its unsaved values). */
+export const limitsFormId = (bookKey: string) => `limits-${bookKey}`;
 
 /** Collapsible editor for one box's limits. */
 export function LimitsEditor({
@@ -206,6 +210,7 @@ export function LimitsEditor({
         <span className="text-[11px] text-faint">{custom ? `${custom} changed from default` : "defaults"} · edit</span>
       </summary>
       <form
+        id={limitsFormId(bookKey)}
         className="space-y-3 border-t border-border p-3"
         onSubmit={(e) => {
           e.preventDefault();
