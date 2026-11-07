@@ -92,6 +92,8 @@ export const CLAUDE_LIMITS: LimitDef[] = [
   // Symbols
   { key: "blocked", group: "Symbols", label: "Never trade", kind: "symbols", def: "", hint: "comma-separated tickers" },
   { key: "allow_reentry", group: "Symbols", label: "Allow a 2nd entry in a symbol the same day", kind: "bool", def: false },
+  { key: "fractional", group: "Risk & size", label: "Fractional shares", kind: "bool", def: true, hint: "whole shares go in a bracket; the fraction gets its own day stop" },
+  { key: "allow_margin", group: "Risk & size", label: "Allow margin (intraday buying power)", kind: "bool", def: false, hint: "more positions at once — more risk" },
 ];
 
 export const RUNNER_LIMITS: LimitDef[] = [

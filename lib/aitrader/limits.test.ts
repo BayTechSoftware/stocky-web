@@ -22,7 +22,7 @@ describe("contract tables", () => {
       [
         "budget", "max_loss_per_trade_usd", "max_daily_loss_usd", "max_trades_per_day", "max_orders_per_day",
         "max_order_usd", "max_position_pct", "cash_buffer_pct", "min_reward_risk", "no_entries_before",
-        "no_entries_after", "flat_by", "blocked", "allow_reentry",
+        "no_entries_after", "flat_by", "blocked", "allow_reentry", "fractional", "allow_margin",
       ].sort()
     );
     expect(keys(RUNNER_LIMITS)).toEqual(
