@@ -99,18 +99,58 @@ export interface Order {
   type: string;
   order_class: string;
   created_at: string;
+  limit_price?: string | null;
+  stop_price?: string | null;
+  replaced_by?: string | null;
+  filled_at?: string | null;
   legs?: Order[] | null;
 }
 
+export const ORDERS_PAGE = 500;
+
+/**
+ * Page through a time-ordered list (oldest first) where each request returns at
+ * most `pageSize` items created strictly after a cursor. The next cursor is the
+ * last item's created_at minus 1 ms (so items sharing that timestamp aren't
+ * skipped); duplicates are dropped by id, and a page that adds nothing new ends it.
+ */
+export async function pageByCreatedAt<T extends { id: string; created_at: string }>(
+  fetchPage: (afterIso: string) => Promise<T[]>,
+  startIso: string,
+  pageSize = ORDERS_PAGE,
+  maxPages = 1000
+): Promise<T[]> {
+  const out: T[] = [];
+  const seen = new Set<string>();
+  let after = startIso;
+  for (let i = 0; i < maxPages; i++) {
+    const page = await fetchPage(after);
+    let added = 0;
+    for (const o of page) {
+      if (seen.has(o.id)) continue;
+      seen.add(o.id);
+      out.push(o);
+      added++;
+    }
+    if (page.length < pageSize || added === 0) break;
+    const lastMs = Date.parse(page[page.length - 1].created_at);
+    if (!Number.isFinite(lastMs)) break;
+    after = new Date(lastMs - 1).toISOString();
+  }
+  return out;
+}
+
+/** Every order (with nested legs) created after `afterIso`, oldest first — all pages. */
 export async function listOrders(c: Creds, afterIso: string): Promise<Order[]> {
-  const q = new URLSearchParams({
-    status: "all",
-    nested: "true",
-    after: afterIso,
-    limit: "500",
-    direction: "asc",
-  });
-  return call<Order[]>(c, TRADE, `/v2/orders?${q}`);
+  return pageByCreatedAt(
+    (after) =>
+      call<Order[]>(
+        c,
+        TRADE,
+        `/v2/orders?${new URLSearchParams({ status: "all", nested: "true", after, limit: String(ORDERS_PAGE), direction: "asc" })}`
+      ),
+    afterIso
+  );
 }
 
 export const submitOrder = (c: Creds, body: Record<string, unknown>) =>
@@ -121,6 +161,14 @@ export const cancelOrder = (c: Creds, id: string) =>
 
 export const getOrder = (c: Creds, id: string) =>
   call<Order>(c, TRADE, `/v2/orders/${encodeURIComponent(id)}?nested=true`);
+
+/**
+ * Replace an open order (PATCH /v2/orders/{id}) — e.g. a bracket leg's
+ * stop_price / limit_price. Alpaca answers with the NEW order (new id); the old
+ * one goes to "replaced". A 200 doesn't guarantee the replace won the race with a fill.
+ */
+export const replaceOrder = (c: Creds, id: string, body: { stop_price?: string; limit_price?: string; qty?: string; time_in_force?: string }) =>
+  call<Order>(c, TRADE, `/v2/orders/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(body) });
 
 export interface Position {
   symbol: string;
@@ -141,19 +189,32 @@ export interface FillActivity {
   transaction_time: string;
 }
 
-/** All fill executions after `afterIso`, oldest first (paginated). */
-export async function listFills(c: Creds, afterIso: string): Promise<FillActivity[]> {
-  const out: FillActivity[] = [];
-  let pageToken: string | undefined;
-  for (let guard = 0; guard < 20; guard++) {
-    const q = new URLSearchParams({ after: afterIso, direction: "asc", page_size: "100" });
-    if (pageToken) q.set("page_token", pageToken);
-    const page = await call<FillActivity[]>(c, TRADE, `/v2/account/activities/FILL?${q}`);
+/** Page through a token-paged list until a short page (or a token that doesn't advance). */
+export async function pageByToken<T extends { id: string }>(
+  fetchPage: (pageToken: string | undefined) => Promise<T[]>,
+  pageSize: number,
+  maxPages = 10_000
+): Promise<T[]> {
+  const out: T[] = [];
+  let token: string | undefined;
+  for (let i = 0; i < maxPages; i++) {
+    const page = await fetchPage(token);
     out.push(...page);
-    if (page.length < 100) break;
-    pageToken = page[page.length - 1].id;
+    if (page.length < pageSize) break;
+    const next = page[page.length - 1].id;
+    if (next === token) break;
+    token = next;
   }
   return out;
+}
+
+/** All fill executions after `afterIso`, oldest first (every page). */
+export async function listFills(c: Creds, afterIso: string): Promise<FillActivity[]> {
+  return pageByToken((pageToken) => {
+    const q = new URLSearchParams({ after: afterIso, direction: "asc", page_size: "100" });
+    if (pageToken) q.set("page_token", pageToken);
+    return call<FillActivity[]>(c, TRADE, `/v2/account/activities/FILL?${q}`);
+  }, 100);
 }
 
 /* ---------------- market data (free IEX feed) ---------------- */

@@ -4,7 +4,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { computeSignalsForSymbols } from "@/lib/refresh";
 import { runAiTrader as runAiTraderEngine } from "@/lib/aitrader/engine";
-import { CLAUDE_LIMITS, RULES_LIMITS, RUNNER_LIMITS, validateLimits } from "@/lib/aitrader/limits";
+import { RUNNER_LIMITS, defsForBook, effective, validateLimits } from "@/lib/aitrader/limits";
 import type { AiRun } from "@/lib/aitrader/view";
 import { AlpacaError, getPaperAccount } from "@/lib/alpaca";
 import { revalidatePath } from "next/cache";
@@ -307,7 +307,11 @@ export async function disconnectAlpaca(): Promise<Result> {
   return { message: "Disconnected — the keys were deleted." };
 }
 
-/** Save one box's limits (validated + clamped against the shared definitions). */
+/**
+ * Save one box's limits (validated + clamped against the shared definitions).
+ * A Rules box's `budget` is its size, so it also sets ai_books.start_cash (the
+ * ledger's starting cash); resetting to defaults resets it to the default budget.
+ */
 export async function saveBookLimits(bookKey: string, values: Record<string, unknown>): Promise<Result> {
   const { supabase, user } = await uid();
   if (!user) return { error: "not signed in" };
@@ -315,12 +319,15 @@ export async function saveBookLimits(bookKey: string, values: Record<string, unk
   const { data: book } = await supabase.from("ai_books").select("id, key").eq("key", bookKey).maybeSingle();
   if (!book) return { error: "no such book" };
   const isClaude = String(book.key).startsWith("claude-");
-  const defs = isClaude
-    ? CLAUDE_LIMITS
-    : RULES_LIMITS.filter((d) => !d.only || d.only === book.key);
+  const defs = defsForBook(String(book.key));
   const v = validateLimits(defs, values);
   if (!v.ok) return { error: v.errors.join(" · ") };
-  const { error } = await createAdminClient().from("ai_books").update({ settings: v.settings }).eq("id", book.id);
+  const patch: { settings: typeof v.settings; start_cash?: number } = { settings: v.settings };
+  if (!isClaude) {
+    const budget = Number(effective(defs, v.settings).budget);
+    if (Number.isFinite(budget) && budget > 0) patch.start_cash = budget;
+  }
+  const { error } = await createAdminClient().from("ai_books").update(patch).eq("id", book.id);
   if (error) return { error: error.message };
   revalidatePath("/dashboard");
   return { message: isClaude ? "Saved — the Mac applies them before Claude's next run." : "Saved — used from the next run." };

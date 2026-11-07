@@ -25,7 +25,9 @@ export interface BookState {
   cash: number;
   realized: number; // realized P&L from closed shares
   closedTrades: number; // sells that fully closed a position
-  wins: number; // of those, how many closed above average cost
+  wins: number; // of those, closed with a profit (> 0)
+  losses: number; // closed with a loss (< 0)
+  flats: number; // closed at breakeven (|P&L| < 1 cent) — neither a win nor a loss
   positions: Map<string, BookPosition>;
 }
 
@@ -38,6 +40,8 @@ export function bookState(startCash: number, fills: Fill[]): BookState {
   let realized = 0;
   let closedTrades = 0;
   let wins = 0;
+  let losses = 0;
+  let flats = 0;
 
   for (const f of sorted) {
     const p = positions.get(f.symbol);
@@ -60,11 +64,14 @@ export function bookState(startCash: number, fills: Fill[]): BookState {
       p.qty -= q;
       if (p.qty <= 1e-9) {
         closedTrades++;
-        if ((tradePnl.get(f.symbol) ?? 0) > 0) wins++;
+        const pnlT = tradePnl.get(f.symbol) ?? 0;
+        if (Math.abs(pnlT) < 0.005) flats++;
+        else if (pnlT > 0) wins++;
+        else losses++;
         positions.delete(f.symbol);
         tradePnl.delete(f.symbol);
       }
     }
   }
-  return { cash, realized, closedTrades, wins, positions };
+  return { cash, realized, closedTrades, wins, losses, flats, positions };
 }

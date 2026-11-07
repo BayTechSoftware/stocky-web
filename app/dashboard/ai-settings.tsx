@@ -3,7 +3,7 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { connectAlpaca, disconnectAlpaca, saveBookLimits, saveRunnerSettings } from "../actions";
-import { effective, type LimitDef } from "@/lib/aitrader/limits";
+import { effective, type LimitDef, type LimitValue, type Settings } from "@/lib/aitrader/limits";
 import { LABEL } from "./ai-run";
 
 type Result = { message: string } | { error: string };
@@ -32,29 +32,149 @@ function Msg({ msg }: { msg: { text: string; err?: boolean } | null }) {
 const unitBefore = (d: LimitDef) => (d.unit === "$" ? "$" : "");
 const unitAfter = (d: LimitDef) => (d.unit && d.unit !== "$" ? d.unit : "");
 
-/** A grid of limit inputs built from the shared definitions (same bounds the server enforces). */
-function Fields({ defs, values }: { defs: LimitDef[]; values: Record<string, number | string> }) {
+/** How a field's default reads next to its label. */
+function showDefault(d: LimitDef): string {
+  const v = d.def;
+  if (d.kind === "bool") return v ? "on" : "off";
+  if (d.kind === "time") return v === "" ? "off" : String(v);
+  if (d.kind === "symbols" || d.kind === "tags") return v === "" ? "none" : String(v).split(",").length > 4 ? `${String(v).split(",").slice(0, 4).join(", ")}…` : String(v).split(",").join(", ");
+  if (d.kind === "select") return String(v);
+  const n = Number(v);
+  const txt = d.unit === "$" ? `$${n.toLocaleString("en-US")}` : `${n}${d.unit ? (d.unit === "×" ? "×" : ` ${d.unit}`.replace(" %", "%")) : ""}`;
+  return txt;
+}
+
+const BOX = "mt-0.5 flex items-center gap-1 rounded-md border border-border bg-surface px-2 focus-within:border-accent";
+const INPUT = "w-full min-w-0 bg-transparent py-1 font-mono text-sm text-text tnum outline-none";
+
+/** A time that can be switched off: when off, the form sends "off". */
+function TimeField({ d, value }: { d: LimitDef; value: string }) {
+  const [off, setOff] = useState(value === "");
   return (
-    <div className="grid gap-x-4 gap-y-2.5 sm:grid-cols-2">
-      {defs.map((d) => (
-        <label key={d.key} className="block">
-          <span className="block text-[11px] text-dim">{d.label}</span>
-          <span className="mt-0.5 flex items-center gap-1 rounded-md border border-border bg-surface px-2 focus-within:border-accent">
-            {unitBefore(d) && <span className="font-mono text-xs text-faint">{unitBefore(d)}</span>}
-            <input
-              name={d.key}
-              type={d.kind === "time" ? "time" : "number"}
-              defaultValue={String(values[d.key])}
-              min={d.kind === "time" ? "09:30" : d.min}
-              max={d.kind === "time" ? "16:00" : d.max}
-              step={d.kind === "time" ? 60 : d.step}
-              required
-              className="w-full min-w-0 bg-transparent py-1 font-mono text-sm text-text tnum outline-none"
-            />
-            {unitAfter(d) && <span className="font-mono text-xs text-faint">{unitAfter(d)}</span>}
-          </span>
-          {d.hint && <span className="mt-0.5 block text-[10px] leading-tight text-faint">{d.hint}</span>}
-        </label>
+    <span className="mt-0.5 flex items-center gap-2">
+      <span className={`${BOX} mt-0 flex-1 ${off ? "opacity-50" : ""}`}>
+        <input
+          name={off ? undefined : d.key}
+          type="time"
+          disabled={off}
+          defaultValue={value || String(d.def || "")}
+          min={d.tmin ?? "09:30"}
+          max={d.tmax ?? "16:00"}
+          step={60}
+          required={!off}
+          className={INPUT}
+        />
+      </span>
+      {off && <input type="hidden" name={d.key} value="off" />}
+      <label className="flex items-center gap-1 text-[11px] text-dim">
+        <input type="checkbox" checked={off} onChange={(e) => setOff(e.target.checked)} className="accent-[var(--color-accent)]" />
+        off
+      </label>
+    </span>
+  );
+}
+
+function Field({ d, value }: { d: LimitDef; value: LimitValue }) {
+  if (d.kind === "bool") {
+    return (
+      <span className="mt-1 flex items-center gap-2">
+        {/* Unchecked boxes send nothing: the hidden "false" goes first, a checked box overrides it. */}
+        <input type="hidden" name={d.key} value="false" />
+        <input
+          type="checkbox"
+          name={d.key}
+          value="true"
+          defaultChecked={value === true}
+          className="peer sr-only"
+          id={`f-${d.key}`}
+        />
+        <span
+          aria-hidden
+          className="relative h-4 w-7 shrink-0 rounded-full bg-surface2 ring-1 ring-inset ring-border transition-colors after:absolute after:left-0.5 after:top-0.5 after:h-3 after:w-3 after:rounded-full after:bg-dim after:transition-transform peer-checked:bg-accent/30 peer-checked:after:translate-x-3 peer-checked:after:bg-accent peer-focus-visible:ring-accent"
+        />
+        <span className="text-[11px] text-dim peer-checked:hidden">off</span>
+        <span className="hidden text-[11px] text-text peer-checked:inline">on</span>
+      </span>
+    );
+  }
+  if (d.kind === "time") {
+    if (d.allowOff) return <TimeField d={d} value={String(value)} />;
+    return (
+      <span className={BOX}>
+        <input name={d.key} type="time" defaultValue={String(value)} min={d.tmin ?? "09:30"} max={d.tmax ?? "16:00"} step={60} required className={INPUT} />
+      </span>
+    );
+  }
+  if (d.kind === "select") {
+    return (
+      <span className={BOX}>
+        <select name={d.key} defaultValue={String(value)} className={`${INPUT} cursor-pointer`}>
+          {d.options?.map((o) => (
+            <option key={o} value={o}>
+              {o}
+            </option>
+          ))}
+        </select>
+      </span>
+    );
+  }
+  if (d.kind === "symbols" || d.kind === "tags") {
+    return (
+      <span className={BOX}>
+        <input
+          name={d.key}
+          type="text"
+          defaultValue={String(value).split(",").filter(Boolean).join(", ")}
+          placeholder={d.kind === "symbols" ? "e.g. AAPL, MSFT" : ""}
+          autoComplete="off"
+          spellCheck={false}
+          className={INPUT}
+        />
+      </span>
+    );
+  }
+  return (
+    <span className={BOX}>
+      {unitBefore(d) && <span className="font-mono text-xs text-faint">{unitBefore(d)}</span>}
+      <input name={d.key} type="number" defaultValue={String(value)} min={d.min} max={d.max} step={d.step ?? "any"} required className={INPUT} />
+      {unitAfter(d) && <span className="font-mono text-xs text-faint">{unitAfter(d)}</span>}
+    </span>
+  );
+}
+
+/** Settings inputs built from the shared definitions (same bounds the server enforces), grouped. */
+function Fields({ defs, values }: { defs: LimitDef[]; values: Settings }) {
+  const groups = Array.from(new Set(defs.map((d) => d.group)));
+  return (
+    <div className="space-y-4">
+      {groups.map((g) => (
+        <fieldset key={g}>
+          <legend className={`mb-1.5 ${LABEL}`}>{g}</legend>
+          <div className="grid gap-x-4 gap-y-2.5 sm:grid-cols-2">
+            {defs
+              .filter((d) => d.group === g)
+              .map((d) => {
+                const wide = d.kind === "symbols" || d.kind === "tags";
+                const Tag = d.kind === "bool" ? "label" : "div";
+                return (
+                  <Tag key={d.key} className={`block ${wide ? "sm:col-span-2" : ""}`} htmlFor={d.kind === "bool" ? `f-${d.key}` : undefined}>
+                    <span className="flex items-baseline justify-between gap-2">
+                      <span className="text-[11px] text-dim">{d.label}</span>
+                      <span className="shrink-0 font-mono text-[10px] text-faint">default {showDefault(d)}</span>
+                    </span>
+                    {d.kind === "bool" || d.kind === "time" ? (
+                      <Field d={d} value={values[d.key]} />
+                    ) : (
+                      <label className="block">
+                        <Field d={d} value={values[d.key]} />
+                      </label>
+                    )}
+                    {d.hint && <span className="mt-0.5 block text-[10px] leading-tight text-faint">{d.hint}</span>}
+                  </Tag>
+                );
+              })}
+          </div>
+        </fieldset>
       ))}
     </div>
   );
@@ -73,7 +193,7 @@ export function LimitsEditor({
 }: {
   bookKey: string;
   defs: LimitDef[];
-  saved: Record<string, number | string>;
+  saved: Record<string, LimitValue>;
   note: string;
 }) {
   const { msg, busy, run } = useAction();
@@ -124,34 +244,36 @@ export function RunnerCard({
   weekCost,
 }: {
   defs: LimitDef[];
-  saved: Record<string, number | string>;
+  saved: Record<string, LimitValue>;
   weekCost: number;
 }) {
   const { msg, busy, run } = useAction();
   const values = effective(defs, saved);
   const cap = Number(values.weekly_cap_usd) || 0;
   const used = cap ? Math.min(100, (weekCost / cap) * 100) : 0;
+  const slowAt = Number(values.throttle_pct) || 0;
   return (
     <div className="card rounded-2xl border border-border bg-surface p-4">
       <div className="flex items-baseline justify-between gap-3">
         <div className={LABEL}>Claude runner (your Mac)</div>
         <div className="font-mono text-xs text-dim tnum">
-          ${weekCost.toFixed(2)} of ${cap.toFixed(0)} this week
+          ${weekCost.toFixed(2)} {cap ? `of $${cap.toFixed(0)} ` : "· no cap "}this week
         </div>
       </div>
       <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-surface2">
         <div
-          className={`h-full rounded-full ${used >= 100 ? "bg-loss" : used >= 80 ? "bg-watch" : "bg-accent"}`}
+          className={`h-full rounded-full ${used >= 100 ? "bg-loss" : slowAt && used >= slowAt ? "bg-watch" : "bg-accent"}`}
           style={{ width: `${used}%` }}
         />
       </div>
       <p className="mt-1.5 text-[11px] leading-relaxed text-faint">
-        Every {values.interval_min} min in market hours, plus a free watcher that wakes Claude early on alerts or
-        important news for held stocks. Usage is API-equivalent dollars from Claude&apos;s own report — on Max it comes
-        out of your weekly limit, not your card.
+        {String(values.model)} every {String(values.interval_min)} min in market hours
+        {cap && slowAt ? `, every ${String(values.throttle_interval_min)} min past ${slowAt}% of the cap` : ""}
+        {values.news_wake ? ", plus a free watcher that wakes Claude early on alerts or important news" : ""}. Usage is
+        API-equivalent dollars from Claude&apos;s own report — on Max it comes out of your weekly limit, not your card.
       </p>
       <details className="mt-2">
-        <summary className="cursor-pointer text-xs text-dim hover:text-text">Edit schedule &amp; cap</summary>
+        <summary className="cursor-pointer text-xs text-dim hover:text-text">Edit schedule, usage &amp; news</summary>
         <form
           className="mt-2 space-y-3"
           onSubmit={(e) => {

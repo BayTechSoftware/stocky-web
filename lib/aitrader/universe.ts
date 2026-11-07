@@ -29,9 +29,15 @@ export const FREE_UNIVERSE: string[] = [
 /** Share classes of the same company: excluding one excludes its twin. */
 const TWINS: Record<string, string> = { GOOG: "GOOGL", GOOGL: "GOOG" };
 
-/** Universe minus the user's list (and twin share classes of anything on it). */
-export function freeUniverse(excludeSymbols: string[]): string[] {
+/**
+ * Universe (+ the book's `universe_add`, − its `universe_remove`) minus the
+ * user's list and twin share classes of anything on it — the two books never
+ * hold the same name.
+ */
+export function freeUniverse(excludeSymbols: string[], add: string[] = [], remove: string[] = []): string[] {
   const ex = new Set(excludeSymbols.map((s) => s.toUpperCase()));
   for (const s of Array.from(ex)) if (TWINS[s]) ex.add(TWINS[s]);
-  return FREE_UNIVERSE.filter((s) => !ex.has(s));
+  const rm = new Set(remove.map((s) => s.toUpperCase()));
+  const base = Array.from(new Set([...FREE_UNIVERSE, ...add.map((s) => s.toUpperCase())]));
+  return base.filter((s) => !ex.has(s) && !rm.has(s));
 }

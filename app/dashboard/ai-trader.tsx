@@ -4,7 +4,7 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { runAiTrader } from "../actions";
 import { money, moneySigned, pct } from "@/lib/portfolio";
-import { RUNNER_LIMITS } from "@/lib/aitrader/limits";
+import { RUNNER_LIMITS, effective } from "@/lib/aitrader/limits";
 import type { AiView } from "@/lib/aitrader/view";
 import { LABEL } from "./ai-run";
 import { BookCard, col } from "./ai-book";
@@ -36,6 +36,8 @@ export default function AiTrader({ ai }: { ai: AiView | null }) {
   const total = ai.books.reduce((a, b) => a + b.equity, 0);
   const weekCost = ai.books.reduce((a, b) => a + b.weekCostUsd, 0);
   const startTotal = ai.books.reduce((a, b) => a + b.startCash, 0);
+  const sizes = Array.from(new Set(ai.books.map((b) => b.startCash)));
+  const model = String(effective(RUNNER_LIMITS, ai.runner).model);
 
   return (
     <section className="mt-3 space-y-4">
@@ -52,8 +54,10 @@ export default function AiTrader({ ai }: { ai: AiView | null }) {
             </div>
             <h2 className="mt-1.5 font-display text-xl font-semibold text-text">AI Trader</h2>
             <p className="mt-0.5 text-xs text-dim">
-              Four $5,000 paper books: <b>Rules</b> (fixed code, runs on the website after the US close) next to{" "}
-              <b>Claude</b> (Claude Sonnet running the day-trader-skill repo on your Mac during market hours). Open
+              {ai.books.length} paper books{sizes.length === 1 ? ` of ${money(sizes[0])} each` : ` (${money(startTotal)} in all)`}:{" "}
+              <b>Rules</b> (fixed code, runs on the website on weekday schedules) next to <b>Claude</b> (Claude{" "}
+              {model} running the day-trader-skill repo on your Mac during market hours). Every limit is yours to set
+              in each box. Open
               any Claude run to see every step: what the repo&apos;s scanner, news, entry, exit, time-machine, budget,
               risk and broker stages said, and what Claude did with it.
             </p>
@@ -111,7 +115,7 @@ export default function AiTrader({ ai }: { ai: AiView | null }) {
 
       <p className="text-[11px] leading-relaxed text-faint">
         Paper trading only — both the website and the Mac refuse non-paper keys and accounts. Rules books are fixed
-        code; Claude books are Claude running the open-source day-trader-skill repo (MIT) with its own risk checks. Not
+        code driven by your settings; Claude books are Claude running the open-source day-trader-skill repo (MIT) with its own risk checks. Not
         investment advice; past or simulated results don&apos;t predict future returns.
       </p>
     </section>

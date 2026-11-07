@@ -3,18 +3,18 @@
 import { useState, useTransition } from "react";
 import { loadRunDetail } from "../actions";
 import { money, moneySigned, pct, price as fprice, shares } from "@/lib/portfolio";
-import { CLAUDE_LIMITS, RULES_LIMITS, effective } from "@/lib/aitrader/limits";
+import { CLAUDE_LIMITS, defsForBook, effective, rulesDefs } from "@/lib/aitrader/limits";
 import type { AiBookView, AiRun, AiRunLite } from "@/lib/aitrader/view";
 import { LABEL, RunDetail, when } from "./ai-run";
 import { LimitsEditor } from "./ai-settings";
 
 const BLURB: Record<AiBookView["key"], string> = {
-  mylist: "Rules only, no AI. Your watchlist on Stocky BUY / WASHOUT signals; exits on OVERBOUGHT or its stop / target. Runs on the website after the US close.",
-  free: "Rules only, no AI. The skill's chart patterns across ~140 large caps in an uptrend, with a time stop. Runs on the website after the US close.",
+  mylist: "Rules only, no AI. Trades your watchlist on Stocky's signals, within the limits below. Runs on the website on weekday schedules.",
+  free: "Rules only, no AI. The Trader skill's daily chart setups across a curated large-cap universe (minus your list), within the limits below. Runs on the website on weekday schedules.",
   "claude-mylist":
-    "Claude Sonnet runs the day-trader-skill repo on your watchlist: scans, reads the news, times entries, flat by the close. On your Mac during market hours.",
+    "Claude runs the day-trader-skill repo on your watchlist: scans, reads the news, times entries, within the limits below. On your Mac during market hours.",
   "claude-free":
-    "Claude Sonnet runs the day-trader-skill repo across ~5,900 US stocks — free choice. Reads the news, times entries, flat by the close. On your Mac during market hours.",
+    "Claude runs the day-trader-skill repo across the US market — free choice. Reads the news, times entries, within the limits below. On your Mac during market hours.",
 };
 
 export function col(v: number | null | undefined) {
@@ -68,7 +68,7 @@ function LimitsUsed({ b }: { b: AiBookView }) {
         <div className="flex justify-between text-[11px]">
           <span className="text-dim">Entries allowed (NY)</span>
           <span className="font-mono text-text tnum">
-            {cfg.no_entries_before}–{cfg.no_entries_after} · flat {cfg.flat_by}
+            {String(cfg.no_entries_before || "open")}–{String(cfg.no_entries_after || "any time")} · flat {String(cfg.flat_by)}
           </span>
         </div>
         <div className="flex justify-between text-[11px]">
@@ -84,7 +84,10 @@ function LimitsUsed({ b }: { b: AiBookView }) {
       </div>
     );
   }
-  const cfg = effective(RULES_LIMITS, b.settings);
+  const cfg = effective(rulesDefs(b.key === "mylist" ? "mylist" : "free"), b.settings);
+  const halt = Number(cfg.daily_loss_halt_pct);
+  const rr = Number(cfg.reward_risk);
+  const hold = Number(cfg.max_hold_days);
   return (
     <div className="grid gap-3 sm:grid-cols-2">
       <Meter
@@ -100,7 +103,13 @@ function LimitsUsed({ b }: { b: AiBookView }) {
         </div>
         <div className="flex justify-between">
           <span className="text-dim">Daily-loss halt</span>
-          <span className="font-mono text-text tnum">{cfg.daily_loss_halt_pct}%</span>
+          <span className="font-mono text-text tnum">{halt > 0 ? `${halt}%` : "off"}</span>
+        </div>
+        <div className="flex justify-between">
+          <span className="text-dim">Target · time stop</span>
+          <span className="font-mono text-text tnum">
+            {rr > 0 ? `${rr}R` : "stop only"} · {hold > 0 ? `${hold}d` : "no time stop"}
+          </span>
         </div>
       </div>
     </div>
@@ -170,7 +179,10 @@ function Timeline({ runs, latestId }: { runs: AiRunLite[]; latestId: string | nu
 export function BookCard({ b }: { b: AiBookView }) {
   const isClaude = b.key.startsWith("claude-");
   const run = b.lastRun;
-  const defs = isClaude ? CLAUDE_LIMITS : RULES_LIMITS.filter((d) => !d.only || d.only === b.key);
+  const defs = defsForBook(b.key);
+  // A Rules box's size is its start_cash; show the real one when no budget is saved.
+  const saved = isClaude ? b.settings : { budget: b.startCash, ...b.settings };
+  const decided = b.wins + b.losses;
   return (
     <div className="card overflow-hidden rounded-2xl border border-border bg-surface">
       <div className="border-b border-border p-4">
@@ -203,7 +215,8 @@ export function BookCard({ b }: { b: AiBookView }) {
             <dd className={`font-mono tnum ${col(b.realized)}`}>{moneySigned(b.realized, 2)}</dd>
             <dt className="text-faint">Win rate</dt>
             <dd className="font-mono text-text tnum">
-              {b.closedTrades ? `${Math.round((b.wins / b.closedTrades) * 100)}% of ${b.closedTrades}` : "—"}
+              {decided ? `${Math.round((b.wins / decided) * 100)}% of ${decided}` : "—"}
+              {b.flats > 0 && <span className="text-faint"> · {b.flats} flat</span>}
             </dd>
           </dl>
         </div>
@@ -236,7 +249,7 @@ export function BookCard({ b }: { b: AiBookView }) {
                   <div className="shrink-0 text-right">
                     <div className="font-mono text-sm text-text tnum">{p.price != null ? `$${fprice(p.price)}` : "—"}</div>
                     <div className={`font-mono text-xs tnum ${col(p.pnl)}`}>
-                      {moneySigned(p.pnl, 2)} · {pct(p.pnlPct)}
+                      {p.pnl != null && p.pnlPct != null ? `${moneySigned(p.pnl, 2)} · ${pct(p.pnlPct)}` : "—"}
                     </div>
                   </div>
                 </div>
@@ -265,7 +278,8 @@ export function BookCard({ b }: { b: AiBookView }) {
                 {o.target != null && ` · target ${fprice(o.target)}`}
                 <span className="text-faint">
                   {" "}
-                  · {o.kind === "entry" ? "waiting to fill" : "exit queued"} · {when(o.created_at)}
+                  · {o.kind === "entry" ? "waiting to fill" : o.stop != null ? "protective stop" : "exit queued"} ·{" "}
+                  {when(o.created_at)}
                 </span>
               </div>
             ))}
@@ -285,11 +299,11 @@ export function BookCard({ b }: { b: AiBookView }) {
         <LimitsEditor
           bookKey={b.key}
           defs={defs}
-          saved={b.settings}
+          saved={saved}
           note={
             isClaude
               ? "These are the repo's own trader/config.json limits. The Mac writes them into this book before every Claude run, and the repo's risk check blocks anything that breaks them."
-              : "Used by the rules engine on its next run."
+              : "Used by the rules engine from its next run. Book size sets this box's starting cash."
           }
         />
       </div>

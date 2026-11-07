@@ -3,9 +3,10 @@
  *
  * The four pattern rules are ported from the Trader skill's daily scanner
  * (Jakeschincariol/day-trader-skill, trader-scanner/scan.py, MIT License) so the
- * book trades "the skills' choices". On top of them we add a trend filter the
- * skill doesn't have: momentum setups must be above their 50-day average and a
- * bounce must be above its 200-day average — buying dips in uptrends only.
+ * book trades "the skills' choices". On top of them an optional trend filter
+ * (the book's `uptrend_only` setting): momentum setups must be above their 50-day
+ * average and a bounce above its 200-day average. An RSI ceiling (`max_rsi`)
+ * skips names too extended to chase.
  */
 import { rsi, sma } from "../signals";
 import type { Bar } from "../alpaca";
@@ -69,23 +70,32 @@ export interface Candidate {
   reason: string;
 }
 
+export interface ScoreOptions {
+  maxRsi: number; // skip when RSI(14) ≥ this (100 = never skip)
+  uptrendOnly: boolean; // apply the 50/200-day trend filter
+}
+
 /**
- * Apply the trend filter and score a symbol's setups. Returns null when nothing
- * qualifies. Momentum setups need close > 50-day MA; a bounce needs close >
- * 200-day MA; anything with RSI ≥ 75 is too extended to chase.
+ * Apply the filters and score a symbol's setups. Returns null when nothing
+ * qualifies. With the trend filter on, momentum setups need close > 50-day MA
+ * and a bounce needs close > 200-day MA.
  */
-export function scoreCandidate(symbol: string, closes: number[]): Candidate | null {
+export function scoreCandidate(
+  symbol: string,
+  closes: number[],
+  opts: ScoreOptions = { maxRsi: 75, uptrendOnly: true }
+): Candidate | null {
   const raw = findSetups(closes);
   if (raw.length === 0) return null;
   const last = closes[closes.length - 1];
   const ma50 = sma(closes, 50);
   const ma200 = sma(closes, 200);
   const r = rsi(closes);
-  if (r != null && r >= 75) return null;
+  if (r != null && opts.maxRsi < 100 && r >= opts.maxRsi) return null;
 
-  const setups = raw.filter((s) =>
-    s === "oversold_bounce" ? ma200 != null && last > ma200 : ma50 != null && last > ma50
-  );
+  const setups = opts.uptrendOnly
+    ? raw.filter((s) => (s === "oversold_bounce" ? ma200 != null && last > ma200 : ma50 != null && last > ma50))
+    : raw;
   if (setups.length === 0) return null;
 
   const score = setups.reduce((a, s) => a + WEIGHT[s], 0);

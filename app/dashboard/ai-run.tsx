@@ -68,10 +68,11 @@ export function Decisions({ decisions, limit }: { decisions: Decision[]; limit?:
             {d.qty != null && d.price != null && (
               <span className="font-mono text-dim tnum"> {shares(d.qty)} @ ${fprice(d.price)}</span>
             )}
-            {d.stop != null && d.target != null && (
+            {d.stop != null && (
               <span className="font-mono text-faint tnum">
                 {" "}
-                (stop {fprice(d.stop)} / target {fprice(d.target)})
+                (stop {fprice(d.stop)}
+                {d.target != null ? ` / target ${fprice(d.target)}` : ""})
               </span>
             )}
             <span className="text-dim"> — {d.reason}</span>

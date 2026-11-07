@@ -3,6 +3,7 @@ import { findSetups, scoreCandidate, atr, rankCandidates } from "./setups";
 import { bracket, sizeQty, RULES, tick } from "./plan";
 import { bookState } from "./ledger";
 import { freeUniverse } from "./universe";
+import { pageByCreatedAt, pageByToken } from "../alpaca";
 
 const flat = (n: number, v = 100) => Array.from({ length: n }, () => v);
 
@@ -113,5 +114,78 @@ describe("universe", () => {
     expect(u).not.toContain("GOOG");
     expect(u).not.toContain("GOOGL");
     expect(u).toContain("XOM");
+  });
+});
+
+describe("ledger outcomes", () => {
+  it("a breakeven close is neither a win nor a loss", () => {
+    const st = bookState(5000, [
+      { symbol: "A", side: "buy", qty: 10, price: 50, transacted_at: "2026-11-09T15:00:00Z" },
+      { symbol: "A", side: "sell", qty: 10, price: 50, transacted_at: "2026-11-10T15:00:00Z" },
+      { symbol: "B", side: "buy", qty: 10, price: 50, transacted_at: "2026-11-09T15:00:00Z" },
+      { symbol: "B", side: "sell", qty: 10, price: 45, transacted_at: "2026-11-10T15:00:00Z" },
+      { symbol: "C", side: "buy", qty: 10, price: 50, transacted_at: "2026-11-09T15:00:00Z" },
+      { symbol: "C", side: "sell", qty: 10, price: 55, transacted_at: "2026-11-10T15:00:00Z" },
+    ]);
+    expect(st).toMatchObject({ closedTrades: 3, wins: 1, losses: 1, flats: 1 });
+  });
+});
+
+describe("universe settings", () => {
+  it("adds and removes symbols, still excluding the user's list", () => {
+    const u = freeUniverse(["PLTR"], ["SMCI", "PLTR", "xyz"], ["TSLA"]);
+    expect(u).toContain("SMCI");
+    expect(u).toContain("XYZ");
+    expect(u).not.toContain("PLTR");
+    expect(u).not.toContain("TSLA");
+  });
+});
+
+describe("free-book filters", () => {
+  // a 20-day breakout well below the 50-day average, with a hot RSI
+  const c = [...Array.from({ length: 60 }, (_, i) => 200 - i), ...Array.from({ length: 20 }, (_, i) => 80 + i), 101];
+  it("uptrend_only off keeps setups the trend filter would drop", () => {
+    expect(scoreCandidate("X", c, { maxRsi: 100, uptrendOnly: true })).toBeNull();
+    expect(scoreCandidate("X", c, { maxRsi: 100, uptrendOnly: false })?.setups).toContain("breakout_20d");
+  });
+  it("max_rsi skips extended names", () => {
+    expect(scoreCandidate("X", c, { maxRsi: 40, uptrendOnly: false })).toBeNull();
+  });
+});
+
+describe("alpaca paging", () => {
+  type O = { id: string; created_at: string };
+  const mk = (n: number): O[] =>
+    Array.from({ length: n }, (_, i) => ({ id: `o${i}`, created_at: new Date(Date.UTC(2026, 0, 1) + i * 1000).toISOString() }));
+
+  it("pageByCreatedAt walks every page from the last created_at", async () => {
+    const all = mk(1234);
+    const afters: string[] = [];
+    const got = await pageByCreatedAt<O>(async (after) => {
+      afters.push(after);
+      return all.filter((o) => o.created_at > after).slice(0, 500);
+    }, "2025-12-31T00:00:00Z");
+    expect(got.map((o) => o.id)).toEqual(all.map((o) => o.id));
+    expect(afters.length).toBe(3);
+  });
+
+  it("pageByCreatedAt stops when a page adds nothing new", async () => {
+    const same = Array.from({ length: 500 }, (_, i) => ({ id: `s${i}`, created_at: "2026-01-01T00:00:00.000Z" }));
+    let calls = 0;
+    const got = await pageByCreatedAt<O>(async () => {
+      calls++;
+      return same;
+    }, "2025-12-31T00:00:00Z");
+    expect(got.length).toBe(500);
+    expect(calls).toBe(2);
+  });
+
+  it("pageByToken follows tokens past the old 20-page cap", async () => {
+    const all = Array.from({ length: 2550 }, (_, i) => ({ id: String(i).padStart(5, "0") }));
+    const got = await pageByToken(async (tok) => {
+      const from = tok ? all.findIndex((x) => x.id === tok) + 1 : 0;
+      return all.slice(from, from + 100);
+    }, 100);
+    expect(got.length).toBe(2550);
   });
 });

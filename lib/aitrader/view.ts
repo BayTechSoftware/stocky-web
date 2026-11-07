@@ -14,10 +14,10 @@ export interface AiPositionView {
   symbol: string;
   qty: number;
   avgCost: number;
-  price: number | null;
-  value: number;
-  pnl: number;
-  pnlPct: number;
+  price: number | null; // null = no live price or Mac mark
+  value: number; // at the price, or at cost when there's none (so equity still adds up)
+  pnl: number | null; // null when there's no price
+  pnlPct: number | null;
   stop: number | null;
   target: number | null;
   reason: string | null;
@@ -50,6 +50,8 @@ export interface AiBookView {
   realized: number;
   closedTrades: number;
   wins: number;
+  losses: number;
+  flats: number;
   positions: AiPositionView[];
   pending: AiOrderView[];
   lastRun: AiRun | null;
@@ -229,17 +231,21 @@ export async function loadAiView(
 
     const positions: AiPositionView[] = Array.from(st.positions.values()).map((p) => {
       const price = px.get(p.symbol) ?? marksOf.get(b.id as string)?.[p.symbol] ?? null;
-      const mark = price ?? p.avgCost;
+      const mark = price ?? p.avgCost; // for the book's equity only
       const entry = bookOrders.find((o) => o.kind === "entry" && o.symbol === p.symbol && (o.filled_qty as number) > 0);
+      // A stand-alone protective stop (placed when an entry's legs went away) wins over the entry's recorded stop.
+      const guard = bookOrders.find(
+        (o) => o.kind === "exit" && o.symbol === p.symbol && o.stop_price != null && OPEN.has(o.status as string)
+      );
       return {
         symbol: p.symbol,
         qty: p.qty,
         avgCost: p.avgCost,
         price,
         value: p.qty * mark,
-        pnl: p.qty * (mark - p.avgCost),
-        pnlPct: p.avgCost > 0 ? (mark / p.avgCost - 1) * 100 : 0,
-        stop: (entry?.stop_price as number | null) ?? null,
+        pnl: price != null ? p.qty * (price - p.avgCost) : null,
+        pnlPct: price != null && p.avgCost > 0 ? (price / p.avgCost - 1) * 100 : null,
+        stop: ((guard?.stop_price ?? entry?.stop_price) as number | null) ?? null,
         target: (entry?.target_price as number | null) ?? null,
         reason: (entry?.reason as string | null) ?? null,
         openedAt: p.openedAt,
@@ -250,12 +256,12 @@ export async function loadAiView(
     const start = b.start_cash as number;
 
     const pending: AiOrderView[] = bookOrders
-      .filter((o) => OPEN.has(o.status as string) && (o.kind === "exit" || (o.filled_qty as number) === 0))
+      .filter((o) => OPEN.has(o.status as string) && (o.kind === "exit" || (o.filled_qty as number) < (o.qty as number)))
       .map((o) => ({
         symbol: o.symbol as string,
         side: o.side as string,
         kind: o.kind as string,
-        qty: o.qty as number,
+        qty: o.kind === "entry" ? (o.qty as number) - ((o.filled_qty as number) || 0) : (o.qty as number),
         limit: (o.limit_price as number | null) ?? null,
         stop: (o.stop_price as number | null) ?? null,
         target: (o.target_price as number | null) ?? null,
@@ -293,6 +299,8 @@ export async function loadAiView(
       realized: st.realized,
       closedTrades: st.closedTrades,
       wins: st.wins,
+      losses: st.losses,
+      flats: st.flats,
       positions,
       pending,
       lastRun: run,
