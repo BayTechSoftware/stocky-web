@@ -79,7 +79,7 @@ export const CLAUDE_LIMITS: LimitDef[] = [
   { key: "budget", group: "Risk & size", label: "Book size", unit: "$", kind: "number", min: 100, max: 1_000_000, step: 100, def: 5000, hint: "what the repo sizes from" },
   { key: "max_loss_per_trade_usd", group: "Risk & size", label: "Max loss per trade", unit: "$", kind: "number", min: 1, max: 1_000_000, step: 1, def: 50 },
   { key: "max_daily_loss_usd", group: "Risk & size", label: "Daily loss limit", unit: "$", kind: "number", min: 1, max: 1_000_000, step: 1, def: 150, hint: "counts each entry's loss at its stop" },
-  { key: "max_trades_per_day", group: "Risk & size", label: "Entries per day", unit: "", kind: "number", min: 0, max: 500, step: 1, int: true, def: 3 },
+  { key: "max_trades_per_day", group: "Risk & size", label: "Entries per day", unit: "", kind: "number", min: 0, max: 500, step: 1, int: true, def: 3, hint: "0 = unlimited (the repo's own meaning)" },
   { key: "max_orders_per_day", group: "Risk & size", label: "Orders per day", unit: "", kind: "number", min: 1, max: 2000, step: 1, int: true, def: 10, hint: "all placed orders incl. exits" },
   { key: "max_order_usd", group: "Risk & size", label: "Max order size", unit: "$", kind: "number", min: 1, max: 1_000_000, step: 100, def: 4000 },
   { key: "max_position_pct", group: "Risk & size", label: "Max position size", unit: "%", kind: "number", min: 1, max: 100, step: 1, def: 75 },
