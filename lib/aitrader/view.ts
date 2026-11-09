@@ -339,7 +339,8 @@ export async function loadAiView(
       key: b.key as AiBookKey,
       name: b.name as string,
       startCash: start,
-      cash: st.cash,
+      // Free cash, as the Mac sizes from it: a short's proceeds aren't spendable and its notional is collateral.
+      cash: st.cash - 2 * positions.reduce((a, p) => a + (p.qty < 0 ? -p.qty * p.avgCost : 0), 0),
       equity,
       pnl: equity - start,
       pnlPct: (equity / start - 1) * 100,
