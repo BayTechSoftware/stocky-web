@@ -28,7 +28,7 @@ function Meter({ label, used, max, fmt }: { label: string; used: number | null; 
       <div className="flex items-baseline justify-between gap-2">
         <span className="text-[11px] text-dim">{label}</span>
         <span className="font-mono text-[11px] text-text tnum">
-          {used == null ? "—" : fmt(used)} <span className="text-faint">/ {fmt(max)}</span>
+          {used == null ? "—" : fmt(used)} <span className="text-faint">/ {max > 0 ? fmt(max) : "no limit"}</span>
         </span>
       </div>
       <div className="mt-1 h-1 overflow-hidden rounded-full bg-surface2">
