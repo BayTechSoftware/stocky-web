@@ -28,7 +28,7 @@ describe("contract tables", () => {
     expect(keys(RUNNER_LIMITS)).toEqual(
       [
         "model", "interval_min", "weekly_cap_usd", "throttle_pct", "throttle_interval_min", "run_timeout_s",
-        "wake_min_gap_min", "news_wake", "news_scope", "news_tags", "premarket_time", "flatten_lead_min", "web_news",
+        "wake_min_gap_min", "news_wake", "news_scope", "news_tags", "premarket_early", "premarket_time", "flatten_lead_min", "web_news",
       ].sort()
     );
     expect(keys(RULES_LIMITS)).toEqual(

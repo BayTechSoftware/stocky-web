@@ -99,6 +99,7 @@ export const CLAUDE_LIMITS: LimitDef[] = [
 export const RUNNER_LIMITS: LimitDef[] = [
   // Schedule
   { key: "interval_min", group: "Schedule", label: "Claude runs every", unit: "min", kind: "number", min: 1, max: 240, step: 1, int: true, def: 15 },
+  { key: "premarket_early", group: "Schedule", label: "Early look (NY)", kind: "time", def: "08:00", allowOff: true, tmin: "04:00", tmax: "09:29", hint: "overnight news, earnings, gaps; news wakes run from here to the open" },
   { key: "premarket_time", group: "Schedule", label: "Pre-market scan (NY)", kind: "time", def: "09:15", allowOff: true, tmin: "07:00", tmax: "09:29" },
   { key: "flatten_lead_min", group: "Schedule", label: "Close-out run starts before flat-by", unit: "min", kind: "number", min: 1, max: 30, step: 1, int: true, def: 5 },
   { key: "run_timeout_s", group: "Schedule", label: "Run timeout", unit: "s", kind: "number", min: 60, max: 3600, step: 10, int: true, def: 720 },
