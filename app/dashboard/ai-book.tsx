@@ -381,6 +381,25 @@ export function BookCard({ b }: { b: AiBookView }) {
           )}
         </div>
 
+        {b.todayTrades.length > 0 && (
+          <div>
+            <div className={`mb-1 ${LABEL}`}>Today&apos;s trades ({b.todayTrades.length})</div>
+            {b.todayTrades.map((t, i) => (
+              <div key={i} className="flex items-baseline justify-between gap-3 border-t border-border py-1.5 text-xs first:border-t-0">
+                <span className="min-w-0">
+                  <span className={`font-semibold ${t.side === "buy" ? "text-gain" : "text-loss"}`}>
+                    {t.side === "buy" ? "Bought" : "Sold"}
+                  </span>{" "}
+                  <span className="font-mono text-text tnum">{shares(t.qty)}</span>{" "}
+                  <span className="font-display font-semibold text-text">{t.symbol}</span>{" "}
+                  <span className="font-mono text-dim tnum">at ${fprice(t.price)}</span>
+                </span>
+                <span className="shrink-0 font-mono text-[11px] text-faint tnum">{when(t.at, false)}</span>
+              </div>
+            ))}
+          </div>
+        )}
+
         {b.pending.length > 0 && (
           <div>
             <div className={`mb-1 ${LABEL}`}>Working orders ({b.pending.length})</div>

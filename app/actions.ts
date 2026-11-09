@@ -6,7 +6,8 @@ import { computeSignalsForSymbols } from "@/lib/refresh";
 import { loadCreds, runAiTrader as runAiTraderEngine } from "@/lib/aitrader/engine";
 import { RUNNER_LIMITS, defsForBook, effective, validateLimits } from "@/lib/aitrader/limits";
 import type { AiRun } from "@/lib/aitrader/view";
-import { AlpacaError, getClock, getDailyBars, getPaperAccount, type Bar, type Creds } from "@/lib/alpaca";
+import { planLiveSync, type KnownOrder } from "@/lib/aitrader/live";
+import { AlpacaError, getClock, getDailyBars, getPaperAccount, listFills, listOrders, type Bar, type Creds } from "@/lib/alpaca";
 import { rulesFor } from "@/lib/aitrader/plan";
 import { freeUniverse } from "@/lib/aitrader/universe";
 import { etDate } from "@/lib/aitrader/decide";
@@ -361,6 +362,46 @@ export async function saveRunnerSettings(values: Record<string, unknown>): Promi
 }
 
 /** One run in full (trace + pipeline), for the run timeline. */
+/**
+ * Bring the user's books up to date from Alpaca (called by the open AI Trader tab
+ * every few seconds). Reads Alpaca, writes only the ledger; never touches an order.
+ */
+export async function syncLive(): Promise<{ ok: true } | { error: string }> {
+  const { user } = await uid();
+  if (!user) return { error: "not signed in" };
+  const admin = createAdminClient();
+  try {
+    const creds = await loadCreds(admin, user.id);
+    if (!creds) return { ok: true };
+    const { data: books } = await admin.from("ai_books").select("id, key, created_at").eq("user_id", user.id);
+    if (!books?.length) return { ok: true };
+    const ids = books.map((b) => b.id as string);
+    const { data: known, error } = await admin
+      .from("ai_orders")
+      .select("id, book_id, alpaca_order_id, leg_ids, status, filled_qty, filled_avg")
+      .in("book_id", ids);
+    if (error) return { error: error.message };
+    const since = books.map((b) => b.created_at as string).sort()[0];
+    const [remote, fills] = await Promise.all([listOrders(creds, since), listFills(creds, since)]);
+    const plan = planLiveSync(
+      (known ?? []) as KnownOrder[],
+      remote,
+      fills,
+      new Map(books.map((b) => [b.key as string, b.id as string]))
+    );
+    await Promise.all(plan.updates.map((u) => admin.from("ai_orders").update(u.patch).eq("id", u.id)));
+    if (plan.inserts.length) {
+      await admin.from("ai_orders").upsert(plan.inserts, { onConflict: "alpaca_order_id", ignoreDuplicates: true });
+    }
+    if (plan.fillRows.length) {
+      await admin.from("ai_fills").upsert(plan.fillRows, { onConflict: "activity_id", ignoreDuplicates: true });
+    }
+    return { ok: true };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
 export async function loadRunDetail(runId: string): Promise<{ run: AiRun } | { error: string }> {
   const { supabase, user } = await uid();
   if (!user) return { error: "not signed in" };

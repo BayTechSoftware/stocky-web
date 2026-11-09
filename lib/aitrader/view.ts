@@ -8,6 +8,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { createAdminClient } from "@/lib/supabase/admin";
 import * as A from "@/lib/alpaca";
 import { bookState } from "./ledger";
+import { tradesFromFills } from "./live";
 import { loadCreds, type ReplayInfo, type RunSummary, type RunUsage } from "./engine";
 import { groupReplays, type AiReplayDay } from "./replays";
 
@@ -58,6 +59,8 @@ export interface AiBookView {
   positions: AiPositionView[];
   pending: AiOrderView[];
   lastRun: AiRun | null;
+  /** Everything bought or sold today (NY day), newest first. */
+  todayTrades: { at: string; symbol: string; side: string; qty: number; price: number }[];
   /** Today's runs (NY day), newest first, without the heavy trace — open one to load it. Replays excluded. */
   today: AiRunLite[];
   /** Claude replay days (mode "claude-replay"), newest first — simulated, never in the ledger. */
@@ -135,7 +138,7 @@ export async function loadAiView(
   const claudeIds = books.filter((b) => String(b.key).startsWith("claude-")).map((b) => b.id as string);
 
   const [fillsR, ordersR, eqR, todayR, weekR, replayR, connR, runnerR, ...latestR] = await Promise.all([
-    supabase.from("ai_fills").select("book_id, symbol, side, qty, price, transacted_at").in("book_id", ids),
+    supabase.from("ai_fills").select("book_id, order_id, symbol, side, qty, price, transacted_at").in("book_id", ids),
     supabase
       .from("ai_orders")
       .select("book_id, symbol, side, kind, qty, limit_price, stop_price, target_price, status, reason, filled_qty, created_at")
@@ -290,7 +293,20 @@ export async function loadAiView(
       }));
 
     const run = latest.get(b.id as string) ?? null;
-    const today: AiRunLite[] = ((todayR.data ?? []) as Record<string, unknown>[])
+    const dayStart = new Date(nyMidnight()).getTime();
+    const todayTrades = tradesFromFills(
+      fills
+        .filter((f) => f.book_id === b.id && new Date(f.transacted_at as string).getTime() >= dayStart)
+        .map((f) => ({
+          order_id: f.order_id as string,
+          symbol: f.symbol as string,
+          side: f.side as string,
+          qty: f.qty as number,
+          price: f.price as number,
+          transacted_at: f.transacted_at as string,
+        }))
+    );
+    const today: AiRunLite[] =((todayR.data ?? []) as Record<string, unknown>[])
       .filter((r) => r.book_id === b.id)
       .map((r) => {
         const ds = (Array.isArray(r.decisions) ? r.decisions : []) as { action?: string }[];
@@ -323,6 +339,7 @@ export async function loadAiView(
       positions,
       pending,
       lastRun: run,
+      todayTrades,
       today,
       replays: groupReplays(
         ((replayR.data ?? []) as Record<string, unknown>[])

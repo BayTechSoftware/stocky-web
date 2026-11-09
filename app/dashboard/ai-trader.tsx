@@ -9,6 +9,7 @@ import type { AiView } from "@/lib/aitrader/view";
 import { LABEL } from "./ai-run";
 import { BookCard, col } from "./ai-book";
 import { ConnectCard, RunnerCard } from "./ai-settings";
+import LiveUpdates from "./ai-live";
 
 export default function AiTrader({ ai }: { ai: AiView | null }) {
   const [msg, setMsg] = useState<{ text: string; err?: boolean } | null>(null);
@@ -48,9 +49,7 @@ export default function AiTrader({ ai }: { ai: AiView | null }) {
               <span className="rounded-full bg-watch/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-watch ring-1 ring-inset ring-watch/30">
                 Paper · simulated money
               </span>
-              {ai.marketOpen != null && (
-                <span className="text-xs text-dim">market {ai.marketOpen ? "open" : "closed"}</span>
-              )}
+              <LiveUpdates marketOpen={ai.marketOpen} />
             </div>
             <h2 className="mt-1.5 font-display text-xl font-semibold text-text">AI Trader</h2>
             <p className="mt-0.5 text-xs text-dim">
