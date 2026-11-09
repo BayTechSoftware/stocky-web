@@ -173,6 +173,7 @@ export const replaceOrder = (c: Creds, id: string, body: { stop_price?: string; 
 export interface Position {
   symbol: string;
   qty: string;
+  side?: string; // "long" | "short"
   avg_entry_price: string;
   current_price: string;
   market_value: string;

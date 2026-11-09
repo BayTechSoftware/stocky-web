@@ -7,7 +7,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { createAdminClient } from "@/lib/supabase/admin";
 import * as A from "@/lib/alpaca";
-import { bookState } from "./ledger";
+import { bookState, fillRole, ledgerFills, shortOrderIds, type FillRole } from "./ledger";
 import { tradesFromFills } from "./live";
 import { loadCreds, type ReplayInfo, type RunSummary, type RunUsage } from "./engine";
 import { groupReplays, type AiReplayDay } from "./replays";
@@ -16,8 +16,8 @@ export type { AiReplayDay, AiReplayStep } from "./replays";
 
 export interface AiPositionView {
   symbol: string;
-  qty: number;
-  avgCost: number;
+  qty: number; // negative = short
+  avgCost: number; // average short price when short
   price: number | null; // null = no live price or Mac mark
   value: number; // at the price, or at cost when there's none (so equity still adds up)
   pnl: number | null; // null when there's no price
@@ -60,7 +60,7 @@ export interface AiBookView {
   pending: AiOrderView[];
   lastRun: AiRun | null;
   /** Everything bought or sold today (NY day), newest first. */
-  todayTrades: { at: string; symbol: string; side: string; qty: number; price: number }[];
+  todayTrades: { at: string; symbol: string; side: string; qty: number; price: number; role: FillRole }[];
   /** Today's runs (NY day), newest first, without the heavy trace — open one to load it. Replays excluded. */
   today: AiRunLite[];
   /** Claude replay days (mode "claude-replay"), newest first — simulated, never in the ledger. */
@@ -137,7 +137,7 @@ export async function loadAiView(
   const ids = books.map((b) => b.id as string);
   const claudeIds = books.filter((b) => String(b.key).startsWith("claude-")).map((b) => b.id as string);
 
-  const [fillsR, ordersR, eqR, todayR, weekR, replayR, connR, runnerR, ...latestR] = await Promise.all([
+  const [fillsR, ordersR, roleOrdersR, eqR, todayR, weekR, replayR, connR, runnerR, ...latestR] = await Promise.all([
     supabase.from("ai_fills").select("book_id, order_id, symbol, side, qty, price, transacted_at").in("book_id", ids),
     supabase
       .from("ai_orders")
@@ -145,6 +145,12 @@ export async function loadAiView(
       .in("book_id", ids)
       .order("created_at", { ascending: false })
       .limit(200),
+    // Separate from the capped list above: an old short entry must still open its position in the ledger.
+    supabase
+      .from("ai_orders")
+      .select("alpaca_order_id, side, kind")
+      .in("book_id", ids)
+      .or("and(kind.eq.entry,side.eq.sell),and(kind.eq.exit,side.eq.buy)"),
     supabase.from("ai_equity").select("book_id, as_of, equity").in("book_id", ids).order("as_of", { ascending: true }),
     // Today's Claude runs, light fields only (the trace can be tens of KB per run).
     claudeIds.length
@@ -216,6 +222,12 @@ export async function loadAiView(
     }
   }
 
+  // Without these, short entries read as stray sells and the box's equity is wrong: say so.
+  if (roleOrdersR.error) {
+    error = [error, `Short positions may be missing: ${roleOrdersR.error.message}`].filter(Boolean).join(" · ");
+  }
+  const { shortEntries, covers } = shortOrderIds(roleOrdersR.data ?? []);
+
   const fills = fillsR.data ?? [];
   const orders = ordersR.data ?? [];
   const eq = eqR.data ?? [];
@@ -235,29 +247,28 @@ export async function loadAiView(
   }
 
   const views: AiBookView[] = books.map((b) => {
-    const st = bookState(
-      b.start_cash as number,
-      fills
-        .filter((f) => f.book_id === b.id)
-        .map((f) => ({
-          symbol: f.symbol as string,
-          side: f.side as "buy" | "sell",
-          qty: f.qty as number,
-          price: f.price as number,
-          transacted_at: f.transacted_at as string,
-        }))
-    );
+    const st = bookState(b.start_cash as number, ledgerFills(fills.filter((f) => f.book_id === b.id), shortEntries));
+    // A short's stop and target legs fill as buys under the entry's row, so the ledger names those.
+    const coverIds = new Set([...covers, ...st.coverOrderIds]);
     const bookOrders = orders.filter((o) => o.book_id === b.id);
 
     const positions: AiPositionView[] = Array.from(st.positions.values()).map((p) => {
       const price = px.get(p.symbol) ?? marksOf.get(b.id as string)?.[p.symbol] ?? null;
       const mark = price ?? p.avgCost; // for the book's equity only
       // A position can be a bracket plus a fractional piece: the bracket carries the stop and target.
-      const entries = bookOrders.filter((o) => o.kind === "entry" && o.symbol === p.symbol && (o.filled_qty as number) > 0);
+      const short = p.qty < 0;
+      const entries = bookOrders.filter(
+        (o) => o.kind === "entry" && o.side === (short ? "sell" : "buy") && o.symbol === p.symbol && (o.filled_qty as number) > 0
+      );
       const entry = entries.find((o) => o.stop_price != null) ?? entries[0];
       // A stand-alone protective stop (placed when an entry's legs went away) wins over the entry's recorded stop.
       const guard = bookOrders.find(
-        (o) => o.kind === "exit" && o.symbol === p.symbol && o.stop_price != null && OPEN.has(o.status as string)
+        (o) =>
+          o.kind === "exit" &&
+          o.side === (short ? "buy" : "sell") &&
+          o.symbol === p.symbol &&
+          o.stop_price != null &&
+          OPEN.has(o.status as string)
       );
       return {
         symbol: p.symbol,
@@ -266,7 +277,7 @@ export async function loadAiView(
         price,
         value: p.qty * mark,
         pnl: price != null ? p.qty * (price - p.avgCost) : null,
-        pnlPct: price != null && p.avgCost > 0 ? (price / p.avgCost - 1) * 100 : null,
+        pnlPct: price != null && p.avgCost > 0 ? (short ? 1 - price / p.avgCost : price / p.avgCost - 1) * 100 : null,
         stop: ((guard?.stop_price ?? entry?.stop_price) as number | null) ?? null,
         target: (entry?.target_price as number | null) ?? null,
         reason: (entry?.reason as string | null) ?? null,
@@ -304,6 +315,7 @@ export async function loadAiView(
           qty: f.qty as number,
           price: f.price as number,
           transacted_at: f.transacted_at as string,
+          role: fillRole(f.side as string, f.order_id as string, shortEntries, coverIds),
         }))
     );
     const today: AiRunLite[] =((todayR.data ?? []) as Record<string, unknown>[])
@@ -318,8 +330,8 @@ export async function loadAiView(
           reason: (r.reason as string | null) ?? null,
           note: (r.note as string | null) ?? null,
           usage: (r.usage as RunUsage | null) ?? null,
-          buys: ds.filter((d) => d.action === "buy").length,
-          sells: ds.filter((d) => d.action === "sell").length,
+          buys: ds.filter((d) => d.action === "buy" || d.action === "cover").length,
+          sells: ds.filter((d) => d.action === "sell" || d.action === "short").length,
           error: (r.error as string | null) ?? null,
         };
       });

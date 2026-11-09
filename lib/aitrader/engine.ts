@@ -19,7 +19,7 @@
  */
 import type { createAdminClient } from "@/lib/supabase/admin";
 import * as A from "@/lib/alpaca";
-import { bookState } from "./ledger";
+import { bookState, ledgerFills, shortOrderIds } from "./ledger";
 import { anchorToFill, entryOrderBody, isStaleEntry, reservedCash, rulesFor, type Rules } from "./plan";
 import { freeUniverse } from "./universe";
 import { atr, type Candidate } from "./setups";
@@ -34,6 +34,10 @@ import {
   keepLegReason,
   mylistCandidates,
   planEntry,
+  shortBlockedSymbols,
+  shortConflict,
+  shortLookupSkip,
+  type ShortCheck,
 } from "./decide";
 
 // Kept exported from here for existing importers; the pure logic lives in ./decide.
@@ -72,7 +76,7 @@ interface OrderRow {
 
 export interface Decision {
   symbol: string;
-  action: "buy" | "sell" | "skip" | "cancel" | "hold" | "watch";
+  action: "buy" | "sell" | "short" | "cover" | "skip" | "cancel" | "hold" | "watch";
   qty?: number;
   price?: number;
   stop?: number;
@@ -289,9 +293,18 @@ async function runForUser(admin: Admin, mode: RunMode, books: BookRow[], creds: 
   }
   const { data: fillsData } = await admin
     .from("ai_fills")
-    .select("book_id, symbol, side, qty, price, transacted_at")
+    .select("book_id, order_id, symbol, side, qty, price, transacted_at")
     .in("book_id", bookIds);
   const allFills = fillsData ?? [];
+  const { shortEntries } = shortOrderIds(ours);
+
+  // Claude books short on this same account; Rules books must never buy into that.
+  let shorts: ShortCheck;
+  try {
+    shorts = { ok: true, symbols: shortBlockedSymbols(await A.getPositions(creds), remote) };
+  } catch (e) {
+    shorts = { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
 
   /* ---- 2. market data for every symbol we might touch ---- */
   const userIds = Array.from(new Set(books.map((b) => b.user_id)));
@@ -362,15 +375,7 @@ async function runForUser(admin: Admin, mode: RunMode, books: BookRow[], creds: 
   return out;
 
   async function runBook(b: BookRow): Promise<RunSummary> {
-    const fills = allFills
-      .filter((f) => f.book_id === b.id)
-      .map((f) => ({
-        symbol: f.symbol as string,
-        side: f.side as "buy" | "sell",
-        qty: f.qty as number,
-        price: f.price as number,
-        transacted_at: f.transacted_at as string,
-      }));
+    const fills = ledgerFills(allFills.filter((f) => f.book_id === b.id), shortEntries);
     const st = bookState(b.start_cash, fills);
     const decisions: Decision[] = [];
     const notes: string[] = [];
@@ -452,7 +457,11 @@ async function runForUser(admin: Admin, mode: RunMode, books: BookRow[], creds: 
       }
 
       /* f) new entries */
-      if (!halted) {
+      const lookupSkip = shortLookupSkip(shorts);
+      if (!halted && lookupSkip) {
+        decisions.push({ symbol: "—", action: "skip", reason: lookupSkip });
+        notes.push(lookupSkip);
+      } else if (!halted) {
         const occupied = new Set([...st.positions.keys(), ...working.map((p) => p.symbol)]);
         const { wantN, skip: noSlots } = entrySlots(R, occupied.size);
         let placed = 0;
@@ -467,6 +476,11 @@ async function runForUser(admin: Admin, mode: RunMode, books: BookRow[], creds: 
         for (const c of cands) {
           if (placed >= wantN) break;
           if (occupied.has(c.symbol)) continue;
+          const conflict = shortConflict(c.symbol, shorts);
+          if (conflict) {
+            decisions.push({ symbol: c.symbol, action: "skip", reason: conflict });
+            continue;
+          }
           const ref = priceOf(c.symbol);
           const plan = planEntry(c, barsBy[c.symbol], ref, R, equity, available);
           if (!plan.ok) {

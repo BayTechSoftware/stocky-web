@@ -9,6 +9,7 @@
 import type { Bar } from "../alpaca";
 import { bracket, sizeQty, type Bracket, type Rules } from "./plan";
 import { atr, rankCandidates, scoreCandidate, type Candidate } from "./setups";
+import { claudeOrderRole } from "./live";
 
 const NY_DATE = new Intl.DateTimeFormat("en-CA", {
   timeZone: "America/New_York",
@@ -23,6 +24,42 @@ export function etDate(d: Date = new Date()): string {
 }
 
 const round2 = (v: number) => Math.round(v * 100) / 100;
+
+/** Order statuses that can still fill. */
+const CAN_STILL_FILL = new Set([
+  "new", "accepted", "pending_new", "partially_filled", "held", "accepted_for_bidding", "pending_replace", "pending_cancel",
+]);
+
+/** Result of looking up the shared account's shorts; a failed lookup must stop new entries. */
+export type ShortCheck = { ok: true; symbols: Set<string> } | { ok: false; error: string };
+
+/**
+ * Symbols a Rules book must not buy: short anywhere on the shared account, or with
+ * a Claude short entry still working. A buy there would silently cover that short.
+ * Only `claude-…-s-…` counts: a Rules book's own protective stop is `stk-…-s-…`.
+ */
+export function shortBlockedSymbols(
+  positions: { symbol: string; qty: string; side?: string }[],
+  orders: { symbol: string; side: string; status: string; client_order_id?: string | null }[]
+): Set<string> {
+  const out = new Set<string>();
+  for (const p of positions) if (Number(p.qty) < 0 || p.side === "short") out.add(p.symbol);
+  for (const o of orders) {
+    if (o.side === "sell" && CAN_STILL_FILL.has(o.status) && claudeOrderRole(o.client_order_id ?? "") === "s") out.add(o.symbol);
+  }
+  return out;
+}
+
+/** Why a run can't open anything at all, or null when the lookup worked. */
+export function shortLookupSkip(check: ShortCheck): string | null {
+  return check.ok ? null : `no new entries this run: couldn't check the account for shorts (${check.error})`;
+}
+
+/** Why this symbol can't be bought, or null when it can. */
+export function shortConflict(symbol: string, check: ShortCheck): string | null {
+  if (!check.ok) return shortLookupSkip(check);
+  return check.symbols.has(symbol) ? "short in another box on this account — buying here would cover it" : null;
+}
 
 /** Signals older than this many calendar days aren't entered on (exits still use them). */
 export const STALE_SIGNAL_DAYS = 3;

@@ -354,13 +354,31 @@ export function BookCard({ b }: { b: AiBookView }) {
               <div key={p.symbol} className="border-t border-border py-2 first:border-t-0">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
-                    <div className="font-display font-semibold text-text">{p.symbol}</div>
-                    <div className="font-mono text-xs text-faint tnum">
-                      {shares(p.qty)} @ ${fprice(p.avgCost)} · in {when(p.openedAt)}
+                    <div className="flex items-center gap-1.5">
+                      <span className="font-display font-semibold text-text">{p.symbol}</span>
+                      {p.qty < 0 && (
+                        <span className="rounded bg-loss/10 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-loss">Short</span>
+                      )}
                     </div>
                     <div className="font-mono text-xs text-faint tnum">
-                      {p.stop != null ? <span className="text-loss">stop {fprice(p.stop)}</span> : "no stop on record"}
-                      {p.target != null && <span className="text-gain"> · target {fprice(p.target)}</span>}
+                      {shares(Math.abs(p.qty))} @ ${fprice(p.avgCost)} · in {when(p.openedAt)}
+                    </div>
+                    <div className="font-mono text-xs text-faint tnum">
+                      {p.stop != null ? (
+                        <span className="text-loss">
+                          stop {p.qty < 0 && "above "}
+                          {fprice(p.stop)}
+                        </span>
+                      ) : (
+                        "no stop on record"
+                      )}
+                      {p.target != null && (
+                        <span className="text-gain">
+                          {" "}
+                          · target {p.qty < 0 && "below "}
+                          {fprice(p.target)}
+                        </span>
+                      )}
                     </div>
                   </div>
                   <div className="shrink-0 text-right">
@@ -388,7 +406,7 @@ export function BookCard({ b }: { b: AiBookView }) {
               <div key={i} className="flex items-baseline justify-between gap-3 border-t border-border py-1.5 text-xs first:border-t-0">
                 <span className="min-w-0">
                   <span className={`font-semibold ${t.side === "buy" ? "text-gain" : "text-loss"}`}>
-                    {t.side === "buy" ? "Bought" : "Sold"}
+                    {t.role === "short" ? "Sold short" : t.role === "cover" ? "Bought to cover" : t.side === "buy" ? "Bought" : "Sold"}
                   </span>{" "}
                   <span className="font-mono text-text tnum">{shares(t.qty)}</span>{" "}
                   <span className="font-display font-semibold text-text">{t.symbol}</span>{" "}
@@ -405,7 +423,9 @@ export function BookCard({ b }: { b: AiBookView }) {
             <div className={`mb-1 ${LABEL}`}>Working orders ({b.pending.length})</div>
             {b.pending.map((o, i) => (
               <div key={i} className="border-t border-border py-1.5 font-mono text-xs text-dim tnum first:border-t-0">
-                <span className={o.side === "buy" ? "text-gain" : "text-loss"}>{o.side.toUpperCase()}</span>{" "}
+                <span className={o.side === "buy" ? "text-gain" : "text-loss"}>
+                  {o.side === "sell" && o.kind === "entry" ? "SELL SHORT" : o.side === "buy" && o.kind === "exit" ? "BUY TO COVER" : o.side.toUpperCase()}
+                </span>{" "}
                 <span className="font-semibold text-text">
                   {shares(o.qty)} {o.symbol}
                 </span>

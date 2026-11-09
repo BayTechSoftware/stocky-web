@@ -5,6 +5,7 @@
  * ever placed, cancelled or replaced from this path.
  */
 import type { FillActivity, Order } from "../alpaca";
+import type { FillRole } from "./ledger";
 
 export interface KnownOrder {
   id: string;
@@ -27,6 +28,25 @@ const OWNERS: [string, string][] = [
 export function ownerOf(clientOrderId: string): string | null {
   for (const [prefix, key] of OWNERS) if (clientOrderId.startsWith(prefix)) return key;
   return null;
+}
+
+export type ClaudeRole = "s" | "x" | "f" | "fs" | "fx";
+
+/**
+ * The role marker in a Claude client_order_id, or null for a plain long entry.
+ * Case matters: `claude-mylist-S-…` is a long entry in ticker S, `-s-` is a short.
+ */
+export function claudeOrderRole(clientOrderId: string): ClaudeRole | null {
+  const key = ownerOf(clientOrderId);
+  if (!key?.startsWith("claude-")) return null;
+  const m = clientOrderId.slice(key.length + 1).match(/^(fs|fx|f|s|x)-/);
+  return m ? (m[1] as ClaudeRole) : null;
+}
+
+/** ai_orders.kind for a Claude order: short entries are sells, covers are buys. */
+export function claudeOrderKind(side: string, clientOrderId: string): "entry" | "exit" {
+  const role = claudeOrderRole(clientOrderId);
+  return (side === "buy" && role !== "x") || role === "s" ? "entry" : "exit";
 }
 
 const num = (v: string | null | undefined) => (v == null || v === "" ? null : Number(v));
@@ -66,7 +86,7 @@ export function planLiveSync(
         book_id: owner,
         symbol: o.symbol,
         side: o.side,
-        kind: o.side === "buy" ? "entry" : "exit",
+        kind: claudeOrderKind(o.side, o.client_order_id ?? ""),
         qty: num(o.qty) ?? 0,
         limit_price: num(o.limit_price),
         stop_price: num(legs.find((l) => l.type === "stop" || l.type === "stop_limit")?.stop_price),
@@ -115,17 +135,17 @@ export function planLiveSync(
 
 /** One line per order for a box's "Today's trades": partial fills merged, newest first. */
 export function tradesFromFills(
-  fills: { order_id: string; symbol: string; side: string; qty: number; price: number; transacted_at: string }[]
-): { at: string; symbol: string; side: string; qty: number; price: number }[] {
-  const by = new Map<string, { at: string; symbol: string; side: string; qty: number; cost: number }>();
+  fills: { order_id: string; symbol: string; side: string; qty: number; price: number; transacted_at: string; role?: FillRole }[]
+): { at: string; symbol: string; side: string; qty: number; price: number; role: FillRole }[] {
+  const by = new Map<string, { at: string; symbol: string; side: string; qty: number; cost: number; role: FillRole }>();
   for (const f of fills) {
-    const t = by.get(f.order_id) ?? { at: f.transacted_at, symbol: f.symbol, side: f.side, qty: 0, cost: 0 };
+    const t = by.get(f.order_id) ?? { at: f.transacted_at, symbol: f.symbol, side: f.side, qty: 0, cost: 0, role: f.role ?? null };
     t.qty += f.qty;
     t.cost += f.qty * f.price;
     if (f.transacted_at < t.at) t.at = f.transacted_at;
     by.set(f.order_id, t);
   }
   return Array.from(by.values())
-    .map((t) => ({ at: t.at, symbol: t.symbol, side: t.side, qty: t.qty, price: t.qty > 0 ? t.cost / t.qty : 0 }))
+    .map((t) => ({ at: t.at, symbol: t.symbol, side: t.side, qty: t.qty, price: t.qty > 0 ? t.cost / t.qty : 0, role: t.role }))
     .sort((a, b) => (a.at < b.at ? 1 : -1));
 }

@@ -40,16 +40,16 @@ export function when(iso: string, withDay = true) {
 
 export function ActionPill({ a }: { a: Decision["action"] }) {
   const cls =
-    a === "buy"
+    a === "buy" || a === "cover"
       ? "bg-gain/10 text-gain"
-      : a === "sell"
+      : a === "sell" || a === "short"
         ? "bg-loss/10 text-loss"
         : a === "cancel"
           ? "bg-watch/10 text-watch"
           : "bg-black/5 text-faint";
   return (
     <span className={`h-fit shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide ${cls}`}>
-      {a}
+      {a === "short" ? "sell short" : a === "cover" ? "buy to cover" : a}
     </span>
   );
 }
@@ -76,6 +76,8 @@ const PHASE: Record<string, string> = {
 const GROUPS: { title: string; actions: Decision["action"][]; tone: string }[] = [
   { title: "Buying", actions: ["buy"], tone: "text-gain" },
   { title: "Selling", actions: ["sell"], tone: "text-loss" },
+  { title: "Selling short: betting it falls", actions: ["short"], tone: "text-loss" },
+  { title: "Buying back a short", actions: ["cover"], tone: "text-gain" },
   { title: "Holding", actions: ["hold"], tone: "text-text" },
   { title: "Watching: may buy", actions: ["watch"], tone: "text-accent" },
   { title: "Passed on", actions: ["skip", "cancel"], tone: "text-faint" },
@@ -84,8 +86,8 @@ const GROUPS: { title: string; actions: Decision["action"][]; tone: string }[] =
 function dealLine(d: Decision): string | null {
   if (!pos(d.price)) return null;
   if (d.action === "watch") return `last price about $${fprice(d.price!)}`;
-  if (d.action !== "buy" && d.action !== "sell") return null;
-  const verb = d.action === "buy" ? "Buy" : "Sell";
+  if (d.action !== "buy" && d.action !== "sell" && d.action !== "short" && d.action !== "cover") return null;
+  const verb = { buy: "Buy", sell: "Sell", short: "Sell short", cover: "Buy back" }[d.action];
   let t = pos(d.qty) ? `${verb} ${shares(d.qty!)} at about $${fprice(d.price!)}` : `${verb} at about $${fprice(d.price!)}`;
   if (d.action === "buy" && pos(d.stop)) {
     t += `. Sells automatically at $${fprice(d.stop!)} if it falls`;
@@ -93,6 +95,14 @@ function dealLine(d: Decision): string | null {
     if (pos(d.qty)) {
       t += `. Risking about $${(d.qty! * (d.price! - d.stop!)).toFixed(0)}`;
       if (pos(d.target)) t += ` to make about $${(d.qty! * (d.target! - d.price!)).toFixed(0)}`;
+    }
+  }
+  if (d.action === "short" && pos(d.stop)) {
+    t += `. Buys back automatically at $${fprice(d.stop!)} if it rises`;
+    if (pos(d.target)) t += `, or at $${fprice(d.target!)} if it falls`;
+    if (pos(d.qty)) {
+      t += `. Risking about $${(d.qty! * (d.stop! - d.price!)).toFixed(0)}`;
+      if (pos(d.target)) t += ` to make about $${(d.qty! * (d.price! - d.target!)).toFixed(0)}`;
     }
   }
   return t;

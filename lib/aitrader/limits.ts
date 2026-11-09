@@ -94,6 +94,7 @@ export const CLAUDE_LIMITS: LimitDef[] = [
   { key: "allow_reentry", group: "Symbols", label: "Allow a 2nd entry in a symbol the same day", kind: "bool", def: false },
   { key: "fractional", group: "Risk & size", label: "Fractional shares", kind: "bool", def: true, hint: "whole shares go in a bracket; the fraction gets its own day stop" },
   { key: "allow_margin", group: "Risk & size", label: "Allow margin (intraday buying power)", kind: "bool", def: false, hint: "more positions at once — more risk" },
+  { key: "allow_short", group: "Risk & size", label: "Allow short selling", kind: "bool", def: false, hint: "lets Claude bet a stock will fall. Whole shares only. A sudden jump up can lose more than the stop. Only stocks no other box holds or has an order on" },
 ];
 
 export const RUNNER_LIMITS: LimitDef[] = [
