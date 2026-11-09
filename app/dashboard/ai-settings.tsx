@@ -86,7 +86,6 @@ function Field({ d, value }: { d: LimitDef; value: LimitValue }) {
           value="true"
           defaultChecked={value === true}
           className="peer sr-only"
-          id={`f-${d.key}`}
         />
         <span
           aria-hidden
@@ -136,7 +135,7 @@ function Field({ d, value }: { d: LimitDef; value: LimitValue }) {
   return (
     <span className={BOX}>
       {unitBefore(d) && <span className="font-mono text-xs text-faint">{unitBefore(d)}</span>}
-      <input name={d.key} type="number" defaultValue={String(value)} min={d.min} max={d.max} step={d.step ?? "any"} required className={INPUT} />
+      <input name={d.key} type="number" defaultValue={String(value)} min={d.min} max={d.max} step={d.int ? 1 : "any"} required className={INPUT} />
       {unitAfter(d) && <span className="font-mono text-xs text-faint">{unitAfter(d)}</span>}
     </span>
   );
@@ -157,7 +156,7 @@ function Fields({ defs, values }: { defs: LimitDef[]; values: Settings }) {
                 const wide = d.kind === "symbols" || d.kind === "tags";
                 const Tag = d.kind === "bool" ? "label" : "div";
                 return (
-                  <Tag key={d.key} className={`block ${wide ? "sm:col-span-2" : ""}`} htmlFor={d.kind === "bool" ? `f-${d.key}` : undefined}>
+                  <Tag key={d.key} className={`block ${wide ? "sm:col-span-2" : ""}`}>
                     <span className="flex items-baseline justify-between gap-2">
                       <span className="text-[11px] text-dim">{d.label}</span>
                       <span className="shrink-0 font-mono text-[10px] text-faint">default {showDefault(d)}</span>

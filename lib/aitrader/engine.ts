@@ -37,7 +37,7 @@ import {
 } from "./decide";
 
 // Kept exported from here for existing importers; the pure logic lives in ./decide.
-export { etDate, barsAsOf, signalAgeDays, STALE_SIGNAL_DAYS } from "./decide";
+export { etDate, barsAsOf, signalAgeDays } from "./decide";
 
 type Admin = ReturnType<typeof createAdminClient>;
 export type RunMode = "cron" | "manual" | "dry";

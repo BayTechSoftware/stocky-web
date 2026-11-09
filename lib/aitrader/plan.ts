@@ -22,6 +22,7 @@ export interface Rules {
   staleEntryHours: number; // entryValidDays × 24 − 4 (so a 1-day entry is gone by the next evening run)
   minPrice: number;
   minScore: number;
+  maxSignalAgeDays: number; // 0 = off
   enterOnWatch: boolean;
   exitOnOverbought: boolean;
   maxHoldDays: number; // 0 = off
@@ -57,6 +58,7 @@ export function rulesFor(settings: Record<string, unknown> | null | undefined, b
     staleEntryHours: validDays * 24 - 4,
     minPrice: num("min_price"),
     minScore: num("min_score"),
+    maxSignalAgeDays: num("max_signal_age_days"),
     enterOnWatch: bool("enter_on_watch"),
     exitOnOverbought: bool("exit_on_overbought"),
     maxHoldDays: num("max_hold_days"),

@@ -27,7 +27,6 @@ export interface LimitDef {
   unit?: "%" | "$" | "×" | "min" | "s" | "days" | "";
   min?: number;
   max?: number;
-  step?: number;
   int?: boolean; // whole numbers only (rounded)
   def: LimitValue;
   /** Per-box default (Rules boxes), resolved by rulesDefs(). */
@@ -47,27 +46,28 @@ const TAG_RE = /^[a-z][a-z_]{0,29}$/;
 
 export const RULES_LIMITS: LimitDef[] = [
   // Risk & size
-  { key: "budget", group: "Risk & size", label: "Book size", unit: "$", kind: "number", min: 100, max: 1_000_000, step: 100, def: 5000, hint: "the book's starting cash; P&L is measured from it" },
-  { key: "risk_pct", group: "Risk & size", label: "Risk per trade", unit: "%", kind: "number", min: 0.01, max: 100, step: 0.01, def: 1, hint: "of the book's equity, measured to the stop" },
-  { key: "max_position_pct", group: "Risk & size", label: "Max position size", unit: "%", kind: "number", min: 1, max: 100, step: 1, def: 20 },
-  { key: "cash_buffer_pct", group: "Risk & size", label: "Cash buffer", unit: "%", kind: "number", min: 0, max: 90, step: 1, def: 10 },
-  { key: "max_positions", group: "Risk & size", label: "Max positions", unit: "", kind: "number", min: 1, max: 500, step: 1, int: true, def: 5 },
-  { key: "max_new_per_run", group: "Risk & size", label: "New trades per run", unit: "", kind: "number", min: 0, max: 500, step: 1, int: true, def: 3 },
-  { key: "daily_loss_halt_pct", group: "Risk & size", label: "Daily-loss halt", unit: "%", kind: "number", min: 0, max: 100, step: 0.5, def: 3, hint: "no new entries after equity falls this much since the last snapshot; 0 = off" },
+  { key: "budget", group: "Risk & size", label: "Book size", unit: "$", kind: "number", min: 100, max: 1_000_000, def: 5000, hint: "the book's starting cash; P&L is measured from it" },
+  { key: "risk_pct", group: "Risk & size", label: "Risk per trade", unit: "%", kind: "number", min: 0.01, max: 100, def: 1, hint: "of the book's equity, measured to the stop" },
+  { key: "max_position_pct", group: "Risk & size", label: "Max position size", unit: "%", kind: "number", min: 1, max: 100, def: 20 },
+  { key: "cash_buffer_pct", group: "Risk & size", label: "Cash buffer", unit: "%", kind: "number", min: 0, max: 90, def: 0, hint: "% of the book kept uninvested; 0 = spend it all" },
+  { key: "max_positions", group: "Risk & size", label: "Max positions", unit: "", kind: "number", min: 1, max: 500, int: true, def: 5 },
+  { key: "max_new_per_run", group: "Risk & size", label: "New trades per run", unit: "", kind: "number", min: 0, max: 500, int: true, def: 3 },
+  { key: "daily_loss_halt_pct", group: "Risk & size", label: "Daily-loss halt", unit: "%", kind: "number", min: 0, max: 100, def: 3, hint: "no new entries after equity falls this much since the last snapshot; 0 = off" },
   // Entries & exits
-  { key: "reward_risk", group: "Entries & exits", label: "Target (reward : risk)", unit: "×", kind: "number", min: 0, max: 20, step: 0.1, def: 2, hint: "0 = no take-profit (stop only)" },
-  { key: "atr_mult", group: "Entries & exits", label: "Stop distance (× ATR14)", unit: "×", kind: "number", min: 0.1, max: 20, step: 0.1, def: 2 },
-  { key: "min_stop_pct", group: "Entries & exits", label: "Min stop distance", unit: "%", kind: "number", min: 0.1, max: 90, step: 0.1, def: 3 },
-  { key: "max_stop_pct", group: "Entries & exits", label: "Max stop distance", unit: "%", kind: "number", min: 0.1, max: 90, step: 0.1, def: 12, hint: "≥ min stop distance" },
-  { key: "entry_slip_pct", group: "Entries & exits", label: "Entry limit above reference", unit: "%", kind: "number", min: 0, max: 50, step: 0.1, def: 1 },
-  { key: "entry_valid_days", group: "Entries & exits", label: "Unfilled entries kept for", unit: "days", kind: "number", min: 1, max: 60, step: 1, int: true, def: 1, hint: "then the unfilled part is cancelled" },
-  { key: "max_hold_days", group: "Entries & exits", label: "Max holding period", unit: "days", kind: "number", min: 0, max: 3650, step: 1, int: true, def: 21, defBy: { mylist: 0, free: 21 }, hint: "calendar days; 0 = off" },
+  { key: "reward_risk", group: "Entries & exits", label: "Target (reward : risk)", unit: "×", kind: "number", min: 0, max: 20, def: 2, hint: "0 = no take-profit (stop only)" },
+  { key: "atr_mult", group: "Entries & exits", label: "Stop distance (× ATR14)", unit: "×", kind: "number", min: 0.1, max: 20, def: 2 },
+  { key: "min_stop_pct", group: "Entries & exits", label: "Min stop distance", unit: "%", kind: "number", min: 0.1, max: 90, def: 3 },
+  { key: "max_stop_pct", group: "Entries & exits", label: "Max stop distance", unit: "%", kind: "number", min: 0.1, max: 90, def: 12, hint: "≥ min stop distance" },
+  { key: "entry_slip_pct", group: "Entries & exits", label: "Entry limit above reference", unit: "%", kind: "number", min: 0, max: 50, def: 1 },
+  { key: "entry_valid_days", group: "Entries & exits", label: "Unfilled entries kept for", unit: "days", kind: "number", min: 1, max: 60, int: true, def: 1, hint: "then the unfilled part is cancelled" },
+  { key: "max_hold_days", group: "Entries & exits", label: "Max holding period", unit: "days", kind: "number", min: 0, max: 3650, int: true, def: 21, defBy: { mylist: 0, free: 21 }, hint: "calendar days; 0 = off" },
   { key: "exit_on_overbought", group: "Entries & exits", label: "Sell when the signal turns OVERBOUGHT", kind: "bool", def: true, only: "mylist" },
   // Strategy
-  { key: "min_price", group: "Strategy", label: "Min share price", unit: "$", kind: "number", min: 0, max: 100_000, step: 1, def: 10 },
-  { key: "min_score", group: "Strategy", label: "Min Stocky signal score", unit: "", kind: "number", min: 0, max: 100, step: 1, def: 60, only: "mylist" },
+  { key: "min_price", group: "Strategy", label: "Min share price", unit: "$", kind: "number", min: 0, max: 100_000, def: 10 },
+  { key: "min_score", group: "Strategy", label: "Min Stocky signal score", unit: "", kind: "number", min: 0, max: 100, def: 60, only: "mylist" },
+  { key: "max_signal_age_days", group: "Strategy", label: "Skip signals older than", unit: "days", kind: "number", min: 0, max: 3650, int: true, def: 3, only: "mylist", hint: "0 = never skip" },
   { key: "enter_on_watch", group: "Strategy", label: "Also enter on WATCH signals", kind: "bool", def: false, only: "mylist" },
-  { key: "max_rsi", group: "Strategy", label: "Skip setups with RSI(14) at or above", unit: "", kind: "number", min: 0, max: 100, step: 1, def: 75, only: "free", hint: "100 = never skip" },
+  { key: "max_rsi", group: "Strategy", label: "Skip setups with RSI(14) at or above", unit: "", kind: "number", min: 0, max: 100, def: 75, only: "free", hint: "100 = never skip" },
   { key: "uptrend_only", group: "Strategy", label: "Uptrend filter (50/200-day average)", kind: "bool", def: true, only: "free" },
   // Universe
   { key: "universe_add", group: "Universe", label: "Add to the universe", kind: "symbols", def: "", only: "free", hint: "comma-separated tickers" },
@@ -76,15 +76,15 @@ export const RULES_LIMITS: LimitDef[] = [
 
 export const CLAUDE_LIMITS: LimitDef[] = [
   // Risk & size
-  { key: "budget", group: "Risk & size", label: "Book size", unit: "$", kind: "number", min: 100, max: 1_000_000, step: 100, def: 5000, hint: "what the repo sizes from" },
-  { key: "max_loss_per_trade_usd", group: "Risk & size", label: "Max loss per trade", unit: "$", kind: "number", min: 1, max: 1_000_000, step: 1, def: 50 },
-  { key: "max_daily_loss_usd", group: "Risk & size", label: "Daily loss limit", unit: "$", kind: "number", min: 1, max: 1_000_000, step: 1, def: 150, hint: "counts each entry's loss at its stop" },
-  { key: "max_trades_per_day", group: "Risk & size", label: "Entries per day", unit: "", kind: "number", min: 0, max: 500, step: 1, int: true, def: 3, hint: "0 = unlimited (the repo's own meaning)" },
-  { key: "max_orders_per_day", group: "Risk & size", label: "Orders per day", unit: "", kind: "number", min: 1, max: 2000, step: 1, int: true, def: 10, hint: "all placed orders incl. exits" },
-  { key: "max_order_usd", group: "Risk & size", label: "Max order size", unit: "$", kind: "number", min: 1, max: 1_000_000, step: 100, def: 4000 },
-  { key: "max_position_pct", group: "Risk & size", label: "Max position size", unit: "%", kind: "number", min: 1, max: 100, step: 1, def: 75 },
-  { key: "cash_buffer_pct", group: "Risk & size", label: "Cash buffer", unit: "%", kind: "number", min: 0, max: 90, step: 1, def: 10 },
-  { key: "min_reward_risk", group: "Risk & size", label: "Min reward : risk", unit: "×", kind: "number", min: 0, max: 20, step: 0.1, def: 1, hint: "0 = off" },
+  { key: "budget", group: "Risk & size", label: "Book size", unit: "$", kind: "number", min: 100, max: 1_000_000, def: 5000, hint: "what the repo sizes from" },
+  { key: "max_loss_per_trade_usd", group: "Risk & size", label: "Max loss per trade", unit: "$", kind: "number", min: 1, max: 1_000_000, def: 50 },
+  { key: "max_daily_loss_usd", group: "Risk & size", label: "Daily loss limit", unit: "$", kind: "number", min: 1, max: 1_000_000, def: 150, hint: "counts each entry's loss at its stop" },
+  { key: "max_trades_per_day", group: "Risk & size", label: "Entries per day", unit: "", kind: "number", min: 0, max: 500, int: true, def: 3, hint: "0 = unlimited (the repo's own meaning)" },
+  { key: "max_orders_per_day", group: "Risk & size", label: "Orders per day", unit: "", kind: "number", min: 1, max: 2000, int: true, def: 10, hint: "all placed orders incl. exits" },
+  { key: "max_order_usd", group: "Risk & size", label: "Max order size", unit: "$", kind: "number", min: 1, max: 1_000_000, def: 4000 },
+  { key: "max_position_pct", group: "Risk & size", label: "Max position size", unit: "%", kind: "number", min: 1, max: 100, def: 75 },
+  { key: "cash_buffer_pct", group: "Risk & size", label: "Cash buffer", unit: "%", kind: "number", min: 0, max: 90, def: 0, hint: "% of the book kept uninvested; 0 = spend it all" },
+  { key: "min_reward_risk", group: "Risk & size", label: "Min reward : risk", unit: "×", kind: "number", min: 0, max: 20, def: 1, hint: "0 = off" },
   // Timing
   { key: "no_entries_before", group: "Timing", label: "No entries before (NY)", kind: "time", def: "09:45", allowOff: true },
   { key: "no_entries_after", group: "Timing", label: "No entries after (NY)", kind: "time", def: "15:30", allowOff: true },
@@ -98,19 +98,19 @@ export const CLAUDE_LIMITS: LimitDef[] = [
 
 export const RUNNER_LIMITS: LimitDef[] = [
   // Schedule
-  { key: "interval_min", group: "Schedule", label: "Claude runs every", unit: "min", kind: "number", min: 1, max: 240, step: 1, int: true, def: 15 },
+  { key: "interval_min", group: "Schedule", label: "Claude runs every", unit: "min", kind: "number", min: 1, max: 240, int: true, def: 15 },
   { key: "premarket_early", group: "Schedule", label: "Early look (NY)", kind: "time", def: "08:00", allowOff: true, tmin: "04:00", tmax: "09:29", hint: "overnight news, earnings, gaps; news wakes run from here to the open" },
   { key: "premarket_time", group: "Schedule", label: "Pre-market scan (NY)", kind: "time", def: "09:15", allowOff: true, tmin: "07:00", tmax: "09:29" },
-  { key: "flatten_lead_min", group: "Schedule", label: "Close-out run starts before flat-by", unit: "min", kind: "number", min: 1, max: 30, step: 1, int: true, def: 5 },
-  { key: "run_timeout_s", group: "Schedule", label: "Run timeout", unit: "s", kind: "number", min: 60, max: 3600, step: 10, int: true, def: 720 },
+  { key: "flatten_lead_min", group: "Schedule", label: "Close-out run starts before flat-by", unit: "min", kind: "number", min: 1, max: 30, int: true, def: 5 },
+  { key: "run_timeout_s", group: "Schedule", label: "Run timeout", unit: "s", kind: "number", min: 60, max: 3600, int: true, def: 720 },
   // Usage
   { key: "model", group: "Usage", label: "Model", kind: "select", options: ["sonnet", "opus", "haiku"], def: "sonnet" },
-  { key: "weekly_cap_usd", group: "Usage", label: "Weekly usage cap", unit: "$", kind: "number", min: 0, max: 100_000, step: 1, def: 30, hint: "API-equivalent; 0 = no cap" },
-  { key: "throttle_pct", group: "Usage", label: "Slow down at", unit: "%", kind: "number", min: 0, max: 100, step: 1, def: 80, hint: "of the cap; 0 = never slow down" },
-  { key: "throttle_interval_min", group: "Usage", label: "…then run every", unit: "min", kind: "number", min: 1, max: 240, step: 1, int: true, def: 60 },
+  { key: "weekly_cap_usd", group: "Usage", label: "Weekly usage cap", unit: "$", kind: "number", min: 0, max: 100_000, def: 30, hint: "API-equivalent; 0 = no cap" },
+  { key: "throttle_pct", group: "Usage", label: "Slow down at", unit: "%", kind: "number", min: 0, max: 100, def: 80, hint: "of the cap; 0 = never slow down" },
+  { key: "throttle_interval_min", group: "Usage", label: "…then run every", unit: "min", kind: "number", min: 1, max: 240, int: true, def: 60 },
   // News
   { key: "news_wake", group: "News", label: "Wake Claude on important news", kind: "bool", def: true },
-  { key: "wake_min_gap_min", group: "News", label: "Min gap between wakes", unit: "min", kind: "number", min: 1, max: 120, step: 1, int: true, def: 5 },
+  { key: "wake_min_gap_min", group: "News", label: "Min gap between wakes", unit: "min", kind: "number", min: 1, max: 120, int: true, def: 5 },
   { key: "news_scope", group: "News", label: "News for", kind: "select", options: ["held", "held_and_list"], def: "held_and_list", hint: "held_and_list: My List book also watches its list" },
   { key: "news_tags", group: "News", label: "News tags that wake Claude", kind: "tags", def: "earnings,deal,legal,risk,halt,regulatory,people,analyst,capital,macro", hint: "comma-separated, lowercase" },
   { key: "web_news", group: "News", label: "Claude may read full stories on the web", kind: "bool", def: true },

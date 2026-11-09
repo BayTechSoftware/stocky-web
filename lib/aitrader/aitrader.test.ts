@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { findSetups, scoreCandidate, atr, rankCandidates } from "./setups";
-import { bracket, sizeQty, RULES, tick } from "./plan";
+import { bracket, rulesFor, sizeQty, RULES, tick } from "./plan";
 import { bookState } from "./ledger";
 import { freeUniverse } from "./universe";
 import { pageByCreatedAt, pageByToken } from "../alpaca";
@@ -65,7 +65,7 @@ describe("plan (risk + sizing)", () => {
     // $5K book, risk $50, $5/share risk → 10 shares; 20% cap at $101 → 9 shares
     expect(sizeQty({ equity: 5000, available: 5000, price: 101, riskPerShare: 5 }).qty).toBe(9);
     // not enough cash after the 10% buffer
-    expect(sizeQty({ equity: 5000, available: 400, price: 101, riskPerShare: 5 })).toEqual({
+    expect(sizeQty({ equity: 5000, available: 400, price: 101, riskPerShare: 5 }, rulesFor({ cash_buffer_pct: 10 }))).toEqual({
       qty: 0,
       why: "not enough cash",
     });
