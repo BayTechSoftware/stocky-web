@@ -66,7 +66,7 @@ function LimitsUsed({ b }: { b: AiBookView }) {
         <div className="flex justify-between text-[11px]">
           <span className="text-dim">Entries allowed (NY)</span>
           <span className="font-mono text-text tnum">
-            {String(cfg.no_entries_before || "open")}–{String(cfg.no_entries_after || "any time")} · flat {String(cfg.flat_by)}
+            {String(cfg.no_entries_before || "open")}–{String(cfg.no_entries_after || "any time")} · {cfg.flat_by ? `flat ${String(cfg.flat_by)}` : "may hold overnight"}
           </span>
         </div>
         <div className="flex justify-between text-[11px]">

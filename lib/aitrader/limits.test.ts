@@ -23,6 +23,7 @@ describe("contract tables", () => {
         "budget", "max_loss_per_trade_usd", "max_daily_loss_usd", "max_trades_per_day", "max_orders_per_day",
         "max_order_usd", "max_position_pct", "cash_buffer_pct", "min_reward_risk", "no_entries_before",
         "no_entries_after", "flat_by", "blocked", "allow_reentry", "fractional", "allow_margin", "allow_short",
+        "min_order_usd", "or_minutes", "margin_multiplier", "pdt_guard", "min_stop_pct", "allow_loosen_stop",
       ].sort()
     );
     expect(keys(RUNNER_LIMITS)).toEqual(
@@ -35,10 +36,18 @@ describe("contract tables", () => {
       [
         "budget", "risk_pct", "max_position_pct", "cash_buffer_pct", "max_positions", "max_new_per_run",
         "daily_loss_halt_pct", "reward_risk", "atr_mult", "min_stop_pct", "max_stop_pct", "entry_slip_pct",
-        "entry_valid_days", "min_price", "min_score", "enter_on_watch", "exit_on_overbought", "max_hold_days",
+        "entry_valid_days", "min_price", "min_score", "max_signal_age_days", "enter_on_watch", "exit_on_overbought", "max_hold_days",
         "max_rsi", "uptrend_only", "universe_add", "universe_remove",
       ].sort()
     );
+  });
+
+  it("every whole-number field's default and minimum are whole, so the browser accepts them", () => {
+    for (const d of [...CLAUDE_LIMITS, ...RULES_LIMITS, ...RUNNER_LIMITS]) {
+      if (d.kind !== "number" || !d.int) continue;
+      expect(Number.isInteger(d.def), d.key).toBe(true);
+      expect(Number.isInteger(d.min ?? 0), d.key).toBe(true);
+    }
   });
 
   it("splits rules fields by box and resolves per-box defaults", () => {
@@ -90,7 +99,7 @@ describe("validateLimits", () => {
       no_entries_before: "15:40",
     });
     expect(validateLimits(CLAUDE_LIMITS, { no_entries_after: "off", no_entries_before: "15:58" }).ok).toBe(false);
-    expect(validateLimits(CLAUDE_LIMITS, { flat_by: "off" }).ok).toBe(false); // required
+    expect(ok(validateLimits(CLAUDE_LIMITS, { flat_by: "off" }))).toEqual({ flat_by: "" }); // off = may hold overnight
     // premarket has its own window
     expect(ok(validateLimits(RUNNER_LIMITS, { premarket_time: "08:00" }))).toEqual({ premarket_time: "08:00" });
     expect(validateLimits(RUNNER_LIMITS, { premarket_time: "09:45" }).ok).toBe(false);
@@ -135,7 +144,7 @@ describe("rulesFor", () => {
     expect(rulesFor({})).toEqual(RULES);
     expect(rulesFor(null)).toEqual(RULES);
     expect(RULES).toMatchObject({
-      budget: 5000, riskPct: 0.01, maxPositionPct: 0.2, cashBufferPct: 0.1, maxPositions: 5, maxNewPerRun: 3,
+      budget: 5000, riskPct: 0.01, maxPositionPct: 0.2, cashBufferPct: 0, maxPositions: 5, maxNewPerRun: 3,
       dailyLossHaltPct: 0.03, rewardRisk: 2, atrMult: 2, minStopPct: 0.03, maxStopPct: 0.12, entrySlipPct: 0.01,
       entryValidDays: 1, staleEntryHours: 20, minPrice: 10, minScore: 60, enterOnWatch: false, exitOnOverbought: true,
       maxHoldDays: 21, maxRsi: 75, uptrendOnly: true, universeAdd: [], universeRemove: [],

@@ -61,9 +61,6 @@ export function shortConflict(symbol: string, check: ShortCheck): string | null 
   return check.symbols.has(symbol) ? "short in another box on this account — buying here would cover it" : null;
 }
 
-/** Signals older than this many calendar days aren't entered on (exits still use them). */
-export const STALE_SIGNAL_DAYS = 3;
-
 /** Whole calendar days (NY) between a timestamp and `today` (YYYY-MM-DD), or null if unknown. */
 export function signalAgeDays(updatedAt: string | null | undefined, today: string): number | null {
   if (!updatedAt) return null;
@@ -94,7 +91,7 @@ export function mylistCandidates(
     .filter(({ sig }) => ok.has(String(sig?.assessment)) && (sig?.score ?? 0) >= R.minScore)
     .filter(({ sym, sig }) => {
       const days = signalAgeDays(sig?.updated_at, today);
-      if (days != null && days > STALE_SIGNAL_DAYS) {
+      if (R.maxSignalAgeDays > 0 && days != null && days > R.maxSignalAgeDays) {
         stale.push({ symbol: sym, days });
         return false;
       }
