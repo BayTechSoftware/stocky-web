@@ -249,7 +249,9 @@ export async function loadAiView(
     const positions: AiPositionView[] = Array.from(st.positions.values()).map((p) => {
       const price = px.get(p.symbol) ?? marksOf.get(b.id as string)?.[p.symbol] ?? null;
       const mark = price ?? p.avgCost; // for the book's equity only
-      const entry = bookOrders.find((o) => o.kind === "entry" && o.symbol === p.symbol && (o.filled_qty as number) > 0);
+      // A position can be a bracket plus a fractional piece: the bracket carries the stop and target.
+      const entries = bookOrders.filter((o) => o.kind === "entry" && o.symbol === p.symbol && (o.filled_qty as number) > 0);
+      const entry = entries.find((o) => o.stop_price != null) ?? entries[0];
       // A stand-alone protective stop (placed when an entry's legs went away) wins over the entry's recorded stop.
       const guard = bookOrders.find(
         (o) => o.kind === "exit" && o.symbol === p.symbol && o.stop_price != null && OPEN.has(o.status as string)
