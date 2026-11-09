@@ -61,6 +61,89 @@ function verdictTone(s: PipelineStep): string {
   return "bg-surface2 text-dim ring-border";
 }
 
+/** Claude records 0 for "not decided yet": never show those as numbers. */
+const pos = (v: number | null | undefined) => typeof v === "number" && v > 0;
+
+const PHASE: Record<string, string> = {
+  PRE: "Before the open",
+  OPEN: "Market just opened",
+  ENTRY: "Looking for trades",
+  MANAGE: "Managing open trades",
+  FLATTEN: "Closing everything for the day",
+  CLOSED: "Market closed",
+};
+
+const GROUPS: { title: string; actions: Decision["action"][]; tone: string }[] = [
+  { title: "Buying", actions: ["buy"], tone: "text-gain" },
+  { title: "Selling", actions: ["sell"], tone: "text-loss" },
+  { title: "Holding", actions: ["hold"], tone: "text-text" },
+  { title: "Watching: may buy", actions: ["watch"], tone: "text-accent" },
+  { title: "Passed on", actions: ["skip", "cancel"], tone: "text-faint" },
+];
+
+function dealLine(d: Decision): string | null {
+  if (!pos(d.price)) return null;
+  if (d.action === "watch") return `last price about $${fprice(d.price!)}`;
+  if (d.action !== "buy" && d.action !== "sell") return null;
+  const verb = d.action === "buy" ? "Buy" : "Sell";
+  let t = pos(d.qty) ? `${verb} ${shares(d.qty!)} at about $${fprice(d.price!)}` : `${verb} at about $${fprice(d.price!)}`;
+  if (d.action === "buy" && pos(d.stop)) {
+    t += `. Sells automatically at $${fprice(d.stop!)} if it falls`;
+    if (pos(d.target)) t += `, or at $${fprice(d.target!)} if it rises`;
+    if (pos(d.qty)) {
+      t += `. Risking about $${(d.qty! * (d.price! - d.stop!)).toFixed(0)}`;
+      if (pos(d.target)) t += ` to make about $${(d.qty! * (d.target! - d.price!)).toFixed(0)}`;
+    }
+  }
+  return t;
+}
+
+/** The plain-English answer to "what is it doing and why": the top of a Claude box. */
+export function ClaudePlan({
+  run,
+}: {
+  run: { ran_at: string; mode: string; summary: RunSummary | null; error: string | null } | null;
+}) {
+  if (!run) return <p className="text-sm text-dim">Claude hasn&apos;t run yet.</p>;
+  const s = run.summary;
+  const ds = s?.decisions ?? [];
+  return (
+    <div>
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <span className="font-display text-sm font-semibold text-text">{PHASE[s?.phase ?? ""] ?? "Latest check"}</span>
+        <span className="font-mono text-[11px] text-faint">checked {when(run.ran_at)}</span>
+      </div>
+      {run.error && <p className="mt-1 text-xs text-loss">{run.error}</p>}
+      {s?.note && <p className="mt-1 text-[13px] leading-relaxed text-text">{s.note}</p>}
+      {ds.length === 0 && !s?.note && <p className="mt-1 text-sm text-dim">No decisions in this check.</p>}
+      {GROUPS.map((g) => {
+        const items = ds.filter((d) => g.actions.includes(d.action));
+        if (!items.length) return null;
+        return (
+          <div key={g.title} className="mt-3">
+            <div className={`text-[11px] font-semibold uppercase tracking-wider ${g.tone}`}>
+              {g.title} ({items.length})
+            </div>
+            <ul className="mt-1 space-y-1.5">
+              {items.map((d, i) => {
+                const deal = dealLine(d);
+                return (
+                  <li key={i} className="text-[13px] leading-snug">
+                    <span className="font-display font-semibold text-text">{d.symbol || "All"}</span>
+                    {d.reason && <span className="text-dim"> — {d.reason}</span>}
+                    {d.trigger && <div className="text-xs text-accent">Would buy if: {d.trigger}</div>}
+                    {deal && <div className="font-mono text-xs text-faint tnum">{deal}</div>}
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export function Decisions({ decisions, limit }: { decisions: Decision[]; limit?: number }) {
   const shown = limit ? decisions.slice(0, limit) : decisions;
   if (!shown.length) return null;
@@ -71,14 +154,14 @@ export function Decisions({ decisions, limit }: { decisions: Decision[]; limit?:
           <ActionPill a={d.action} />
           <span className="min-w-0">
             <span className="font-semibold text-text">{d.symbol}</span>
-            {d.qty != null && d.price != null && (
-              <span className="font-mono text-dim tnum"> {shares(d.qty)} @ ${fprice(d.price)}</span>
+            {pos(d.qty) && pos(d.price) && (
+              <span className="font-mono text-dim tnum"> {shares(d.qty!)} @ ${fprice(d.price!)}</span>
             )}
-            {d.stop != null && (
+            {pos(d.stop) && (
               <span className="font-mono text-faint tnum">
                 {" "}
-                (stop {fprice(d.stop)}
-                {d.target != null ? ` / target ${fprice(d.target)}` : ""})
+                (stop {fprice(d.stop!)}
+                {pos(d.target) ? ` / target ${fprice(d.target!)}` : ""})
               </span>
             )}
             <span className="text-dim"> — {d.reason}</span>

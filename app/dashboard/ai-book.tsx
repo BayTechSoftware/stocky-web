@@ -5,7 +5,7 @@ import { loadRunDetail } from "../actions";
 import { money, moneySigned, pct, price as fprice, shares } from "@/lib/portfolio";
 import { CLAUDE_LIMITS, defsForBook, effective, rulesDefs } from "@/lib/aitrader/limits";
 import type { AiBookView, AiReplayDay, AiRun, AiRunLite } from "@/lib/aitrader/view";
-import { LABEL, RunDetail, col, when } from "./ai-run";
+import { ClaudePlan, LABEL, RunDetail, col, when } from "./ai-run";
 import { BacktestPanel } from "./ai-backtest";
 import { LimitsEditor } from "./ai-settings";
 
@@ -333,6 +333,13 @@ export function BookCard({ b }: { b: AiBookView }) {
       </div>
 
       <div className="space-y-4 p-4">
+        {isClaude && (
+          <div className="rounded-lg border border-accent/30 bg-accent/5 p-3">
+            <div className={`mb-2 ${LABEL}`}>What Claude is doing</div>
+            <ClaudePlan run={run} />
+          </div>
+        )}
+
         <div>
           <div className={`mb-2 ${LABEL}`}>Limits used{isClaude ? " today" : ""}</div>
           <LimitsUsed b={b} />

@@ -78,6 +78,7 @@ export interface Decision {
   stop?: number;
   target?: number;
   reason: string;
+  trigger?: string; // Claude: what would make it act on a stock it's watching
 }
 
 /** One thing Claude did during a run (from its stream-json transcript, recorded on the Mac). */
