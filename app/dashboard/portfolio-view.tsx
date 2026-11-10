@@ -22,6 +22,7 @@ import {
   type Lot,
 } from "@/lib/portfolio";
 import DevicePairing, { type DeviceToken } from "./device-pairing";
+import LivePrices, { PriceKeyCard, type PricesInfo } from "./live-prices";
 import AiTrader from "./ai-trader";
 import type { AiView } from "@/lib/aitrader/view";
 
@@ -41,6 +42,8 @@ export interface Sig {
   tag: string | null;
   score: number | null;
   updated_at: string | null;
+  /** Set when price/prev_close come from the live Finnhub cache (when it answered). */
+  live_at?: string | null;
 }
 export interface Row {
   symbol: string;
@@ -379,11 +382,13 @@ export default function PortfolioView({
   email,
   devices,
   ai,
+  prices,
 }: {
   rows: Row[];
   email: string;
   devices: DeviceToken[];
   ai: AiView | null;
+  prices: PricesInfo;
 }) {
   const [tab, setTab] = useState<"holdings" | "watchlist" | "ai">("holdings");
   const [filter, setFilter] = useState<string>("ALL");
@@ -492,6 +497,9 @@ export default function PortfolioView({
           </div>
         </div>
         {refreshMsg && <p className="mt-2 text-right text-xs text-dim">{refreshMsg}</p>}
+        <div className="mt-2 flex justify-end">
+          <LivePrices info={prices} />
+        </div>
 
         <div className="mt-6 border-b border-border pb-6 md:mt-7 md:pb-7">
           <div className="text-[11px] font-semibold uppercase tracking-wider text-faint">
@@ -725,9 +733,14 @@ export default function PortfolioView({
           onClick={() => setShowDevice((s) => !s)}
           className="flex items-center gap-2 text-sm text-dim hover:text-text"
         >
-          <span className={`transition ${showDevice ? "rotate-90" : ""}`}>▸</span> Stocky device
+          <span className={`transition ${showDevice ? "rotate-90" : ""}`}>▸</span> Stocky device &amp; live prices
         </button>
-        {showDevice && <DevicePairing tokens={devices} />}
+        {showDevice && (
+          <>
+            <PriceKeyCard info={prices} />
+            <DevicePairing tokens={devices} />
+          </>
+        )}
       </div>
     </div>
   );

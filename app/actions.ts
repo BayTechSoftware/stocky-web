@@ -23,6 +23,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { randomBytes, createHash } from "node:crypto";
 import type { Lot } from "@/lib/portfolio";
+import { FinnhubError, fetchFinnhubQuote } from "@/lib/livequotes";
 
 /** One Twelve Data request stays within the free-tier 8-credits/minute budget. */
 const REFRESH_BATCH = 8;
@@ -317,6 +318,53 @@ export async function disconnectAlpaca(): Promise<Result> {
   if (error) return { error: error.message };
   revalidatePath("/dashboard");
   return { message: "Disconnected — the keys were deleted." };
+}
+
+/* ---------------- Live prices: the user's Finnhub key ---------------- */
+
+/**
+ * Store the user's Finnhub key for live prices. It's checked with one real
+ * /quote call, then kept encrypted in Supabase Vault. It is never put in an env
+ * var or sent back to the browser; only a hint ("…a1b2") stays readable.
+ */
+export async function connectFinnhub(formData: FormData): Promise<Result> {
+  const { user } = await uid();
+  if (!user) return { error: "not signed in" };
+  const key = String(formData.get("key") ?? "").trim();
+  if (!/^[A-Za-z0-9]{16,64}$/.test(key)) return { error: "That doesn't look like a Finnhub API key." };
+  try {
+    const q = await fetchFinnhubQuote("AAPL", key);
+    if (!q) return { error: "Finnhub answered but returned no price. Check the key on finnhub.io." };
+  } catch (e) {
+    const msg =
+      e instanceof FinnhubError && (e.status === 401 || e.status === 403)
+        ? "Finnhub rejected this key."
+        : e instanceof FinnhubError && e.status === 429
+          ? "Finnhub says this key is over its rate limit right now. Try again in a minute."
+          : "Couldn't reach Finnhub to check the key.";
+    return { error: msg };
+  }
+  const admin = createAdminClient();
+  const { error: vErr } = await admin.rpc("set_finnhub_key", { p_user: user.id, p_key: key });
+  if (vErr) return { error: `Couldn't store the key: ${vErr.message}` };
+  const { error: cErr } = await admin
+    .from("price_connections")
+    .upsert({ user_id: user.id, key_hint: `…${key.slice(-4)}`, connected_at: new Date().toISOString() });
+  if (cErr) return { error: cErr.message };
+  revalidatePath("/dashboard");
+  return { message: "Live prices on." };
+}
+
+export async function disconnectFinnhub(): Promise<Result> {
+  const { user } = await uid();
+  if (!user) return { error: "not signed in" };
+  const admin = createAdminClient();
+  const { error: vErr } = await admin.rpc("remove_finnhub_key", { p_user: user.id });
+  if (vErr) return { error: vErr.message };
+  const { error } = await admin.from("price_connections").delete().eq("user_id", user.id);
+  if (error) return { error: error.message };
+  revalidatePath("/dashboard");
+  return { message: "Removed. The key was deleted." };
 }
 
 /**
