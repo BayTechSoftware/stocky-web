@@ -309,60 +309,153 @@ function exitBasis(t: AiBookView["todayTrades"][number]): number {
 
 /** Every completed round trip, newest first: what each close made or lost. */
 function ClosedTrades({ trades }: { trades: ClosedTrade[] }) {
-  const [open, setOpen] = useState(true);
   const [all, setAll] = useState(false);
-  if (!trades.length) return null;
+  if (!trades.length) return <Block title="Closed trades"><Empty>No closed trades yet.</Empty></Block>;
   const shown = all ? trades : trades.slice(0, 10);
+  const total = trades.reduce((a, t) => a + t.pnl, 0);
+  const won = trades.filter((t) => t.pnl > 0.005).length;
   return (
-    <div>
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        aria-expanded={open}
-        className={`mb-1 flex w-full items-center justify-between gap-2 text-left ${LABEL}`}
-      >
-        <span>Closed trades ({trades.length})</span>
-        <span aria-hidden>{open ? "−" : "+"}</span>
-      </button>
-      {open && (
-        <>
-          {shown.map((t, i) => (
-            <div key={`${t.symbol}-${t.closedAt}-${i}`} className="border-t border-border py-2 text-xs first:border-t-0">
-              <div className="flex items-baseline justify-between gap-3">
-                <span className="flex min-w-0 flex-wrap items-baseline gap-x-1.5">
+    <Block title={`Closed trades (${trades.length})`} hint={`${won} won · ${moneySigned(total, 2)} in all`}>
+      <ul className="divide-y divide-border rounded-xl border border-border">
+        {shown.map((t, i) => (
+          <li key={`${t.symbol}-${t.closedAt}-${i}`} className="px-3.5 py-3">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                   <span className="font-display font-semibold text-text">{t.symbol}</span>
                   <span
-                    className={`rounded px-1 py-px text-[9.5px] font-bold uppercase tracking-wider ${t.direction === "long" ? "bg-gain/10 text-gain" : "bg-loss/10 text-loss"}`}
+                    className={`rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider ${t.direction === "long" ? "bg-gain/10 text-gain" : "bg-loss/10 text-loss"}`}
                   >
                     {t.direction}
                   </span>
-                  <span className="font-mono text-dim tnum">{shares(t.qty)}</span>
-                  <span className="font-mono text-dim tnum">
-                    ${fprice(t.avgEntry)} → ${fprice(t.avgExit)}
+                  <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${REASON_CLS[t.exitReason]}`}>
+                    {REASON_LABEL[t.exitReason]}
                   </span>
-                </span>
-                <span className={`shrink-0 text-right font-mono font-semibold tnum ${col(t.pnl)}`}>
-                  {moneySigned(t.pnl, 2)} <span className="font-normal">({pct(t.pnlPct)})</span>
-                </span>
+                </div>
+                <div className="mt-1 font-mono text-xs text-dim tnum">
+                  {shares(t.qty)} sh · ${fprice(t.avgEntry)} → ${fprice(t.avgExit)} · held {held(t.holdMinutes)}
+                </div>
               </div>
-              <div className="mt-0.5 flex flex-wrap items-center justify-between gap-x-3 gap-y-0.5 text-[11px]">
-                <span className="flex items-center gap-2">
-                  <span className={`rounded px-1.5 py-px text-[10px] font-semibold ${REASON_CLS[t.exitReason]}`}>{REASON_LABEL[t.exitReason]}</span>
-                  {t.r != null && <span className={`font-mono tnum ${col(t.r)}`}>{(t.r < 0 ? "−" : "+") + Math.abs(t.r).toFixed(1)}R</span>}
-                  <span className="font-mono text-faint tnum">held {held(t.holdMinutes)}</span>
-                </span>
-                <span className="font-mono text-faint tnum">{when(t.closedAt)}</span>
+              <div className="shrink-0 text-right">
+                <div className={`font-mono text-sm font-semibold tnum ${col(t.pnl)}`}>{moneySigned(t.pnl, 2)}</div>
+                <div className={`font-mono text-[11px] tnum ${col(t.pnl)}`}>
+                  {pct(t.pnlPct)}
+                  {t.r != null && (
+                    <span className="text-faint" title="Result as a multiple of the risk taken at entry (entry to stop)">
+                      {" "}
+                      · {t.r < 0 ? "−" : "+"}
+                      {Math.abs(t.r).toFixed(1)}× risk
+                    </span>
+                  )}
+                </div>
+                <div className="font-mono text-[11px] text-faint tnum">{when(t.closedAt)}</div>
               </div>
             </div>
-          ))}
-          {trades.length > 10 && (
-            <button type="button" onClick={() => setAll((v) => !v)} className="mt-1 text-[11px] text-accent hover:underline">
-              {all ? "Show fewer" : `Show all ${trades.length}`}
-            </button>
-          )}
-        </>
+          </li>
+        ))}
+      </ul>
+      {trades.length > 10 && (
+        <button type="button" onClick={() => setAll((v) => !v)} className="mt-2 text-xs font-medium text-text underline-offset-4 hover:underline">
+          {all ? "Show fewer" : `Show all ${trades.length}`}
+        </button>
       )}
-    </div>
+    </Block>
+  );
+}
+
+type Section = "now" | "trades" | "runs" | "settings";
+
+/** Where the price sits between the stop and the target (0 = at the stop, 1 = at the target). */
+function stopTargetPos(p: AiBookView["positions"][number]): number | null {
+  if (p.stop == null || p.target == null || p.price == null || p.target === p.stop) return null;
+  return Math.max(0, Math.min(1, (p.price - p.stop) / (p.target - p.stop)));
+}
+
+function PositionRow({ p, isClaude }: { p: AiBookView["positions"][number]; isClaude: boolean }) {
+  const short = p.qty < 0;
+  const pos = stopTargetPos(p);
+  const entryPos =
+    p.stop != null && p.target != null && p.target !== p.stop
+      ? Math.max(0, Math.min(1, (p.avgCost - p.stop) / (p.target - p.stop)))
+      : null;
+  return (
+    <li className="rounded-xl border border-border bg-surface p-3.5">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="font-display text-base font-semibold text-text">{p.symbol}</span>
+            <span
+              className={`rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider ${short ? "bg-loss/10 text-loss" : "bg-gain/10 text-gain"}`}
+            >
+              {short ? "Short" : "Long"}
+            </span>
+          </div>
+          <div className="mt-0.5 font-mono text-xs text-dim tnum">
+            {shares(Math.abs(p.qty))} sh · in at ${fprice(p.avgCost)} · {when(p.openedAt)}
+          </div>
+        </div>
+        <div className="shrink-0 text-right">
+          <div className={`font-mono text-base font-semibold tnum ${col(p.pnl)}`}>
+            {p.pnl != null ? moneySigned(p.pnl, 2) : "—"}
+          </div>
+          <div className="font-mono text-xs text-dim tnum">
+            {p.price != null ? `$${fprice(p.price)}` : "—"}
+            {p.pnlPct != null && <span className={col(p.pnl)}> · {pct(p.pnlPct)}</span>}
+          </div>
+        </div>
+      </div>
+
+      {pos != null ? (
+        <div className="mt-3">
+          <div className="relative h-2 rounded-full bg-gradient-to-r from-loss/25 via-surface2 to-gain/25">
+            {entryPos != null && (
+              <span
+                className="absolute top-1/2 h-3.5 w-px -translate-y-1/2 bg-faint"
+                style={{ left: `${entryPos * 100}%` }}
+                title="your entry"
+              />
+            )}
+            <span
+              className="absolute top-1/2 h-3.5 w-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-surface bg-text shadow"
+              style={{ left: `${pos * 100}%` }}
+              title="price now"
+            />
+          </div>
+          <div className="mt-1.5 flex justify-between font-mono text-[11px] tnum">
+            <span className="text-loss">stop ${fprice(p.stop as number)}</span>
+            <span className="text-gain">target ${fprice(p.target as number)}</span>
+          </div>
+        </div>
+      ) : (
+        <div className="mt-2 font-mono text-[11px] text-faint tnum">
+          {p.stop != null ? <span className="text-loss">stop ${fprice(p.stop)}</span> : "no stop on record"}
+          {p.target != null && <span className="text-gain"> · target ${fprice(p.target)}</span>}
+        </div>
+      )}
+
+      {p.reason && (
+        <p className="mt-2.5 border-t border-border pt-2 text-xs leading-relaxed text-dim">
+          <span className="text-faint">{isClaude ? (short ? "Why Claude shorted: " : "Why Claude bought: ") : "Why: "}</span>
+          {p.reason}
+        </p>
+      )}
+    </li>
+  );
+}
+
+function Empty({ children }: { children: React.ReactNode }) {
+  return <p className="rounded-xl border border-dashed border-border px-4 py-6 text-center text-sm text-dim">{children}</p>;
+}
+
+function Block({ title, hint, children }: { title: string; hint?: string; children: React.ReactNode }) {
+  return (
+    <section>
+      <div className="mb-2 flex items-baseline justify-between gap-3">
+        <h3 className="font-display text-sm font-semibold text-text">{title}</h3>
+        {hint && <span className="text-[11px] text-faint">{hint}</span>}
+      </div>
+      {children}
+    </section>
   );
 }
 
@@ -370,198 +463,226 @@ export function BookCard({ b }: { b: AiBookView }) {
   const isClaude = b.key.startsWith("claude-");
   const run = b.lastRun;
   const defs = defsForBook(b.key);
+  const [section, setSection] = useState<Section>("now");
   // A Rules box's size is its start_cash; show the real one when no budget is saved.
   const saved = isClaude ? b.settings : { budget: b.startCash, ...b.settings };
   const decided = b.wins + b.losses;
+  const closedToday = b.todayTrades.filter((t) => t.pnl != null);
+  const todayPnl = closedToday.reduce((a, t) => a + (t.pnl ?? 0), 0);
+  const openPnl = b.positions.reduce((a, p) => a + (p.pnl ?? 0), 0);
+  const entriesWaiting = b.pending.filter((o) => o.kind === "entry").length;
+
+  const status = [
+    b.positions.length ? `Holding ${b.positions.length} stock${b.positions.length === 1 ? "" : "s"}` : "No open positions",
+    closedToday.length ? `${closedToday.length} closed today, ${moneySigned(todayPnl, 2)}` : null,
+    entriesWaiting ? `${entriesWaiting} order${entriesWaiting === 1 ? "" : "s"} waiting to fill` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
+  const tabs: { key: Section; label: string; count?: number }[] = [
+    { key: "now", label: "Now", count: b.positions.length + b.pending.length || undefined },
+    { key: "trades", label: "Trades", count: b.closed.length || undefined },
+    { key: "runs", label: isClaude ? "Claude's runs" : "Runs", count: isClaude ? b.today.length || undefined : undefined },
+    { key: "settings", label: "Limits & settings" },
+  ];
+
   return (
-    <div className="card overflow-hidden rounded-2xl border border-border bg-surface">
-      <div className="border-b border-border p-4">
-        <div className="flex items-start justify-between gap-3">
+    <div className="card rounded-2xl border border-border bg-surface">
+      {/* ---------- statement header ---------- */}
+      <header className="p-5 md:p-6">
+        <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
               <span
-                className={`rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider ${isClaude ? "bg-accent/10 text-accent" : "bg-surface2 text-dim"}`}
+                className={`rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider ${isClaude ? "bg-accent text-surface" : "bg-surface2 text-dim"}`}
               >
                 {isClaude ? "Claude" : "Rules"}
               </span>
-              <span className="font-display text-lg font-semibold text-text">{b.name}</span>
+              <h2 className="font-display text-xl font-semibold tracking-tight text-text">{b.name}</h2>
             </div>
-            <p className="mt-1 text-xs text-dim">{BLURB[b.key]}</p>
+            <p className="mt-1.5 max-w-prose text-sm leading-relaxed text-dim">{BLURB[b.key]}</p>
           </div>
-          <Spark series={b.series} />
-        </div>
-        <div className="mt-3 flex flex-wrap items-end justify-between gap-3">
-          <div>
-            <div className={LABEL}>Equity</div>
-            <div className="font-display text-3xl font-semibold text-text tnum">{money(b.equity, 2)}</div>
-            <div className={`font-mono text-sm tnum ${col(b.pnl)}`}>
-              {moneySigned(b.pnl, 2)} ({pct(b.pnlPct)})
-            </div>
+          <div className="hidden sm:block">
+            <Spark series={b.series} />
           </div>
-          <dl className="grid grid-cols-[auto_auto] gap-x-4 gap-y-0.5 text-right text-xs">
-            <dt className="text-faint">Cash</dt>
-            <dd className="font-mono text-text tnum">{money(b.cash, 2)}</dd>
-            <dt className="text-faint">Realized</dt>
-            <dd className={`font-mono tnum ${col(b.realized)}`}>{moneySigned(b.realized, 2)}</dd>
-            <dt className="text-faint">Win rate</dt>
-            <dd className="font-mono text-text tnum">
-              {decided ? `${Math.round((b.wins / decided) * 100)}% of ${decided}` : "—"}
-              {b.flats > 0 && <span className="text-faint"> · {b.flats} flat</span>}
-            </dd>
-          </dl>
         </div>
-      </div>
 
-      <div className="grid gap-6 p-4 md:p-5 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
-      <div className="min-w-0 space-y-5">
-        {isClaude && (
-          <div className="rounded-lg border border-accent/30 bg-accent/5 p-3">
-            <div className={`mb-2 ${LABEL}`}>What Claude is doing</div>
-            <ClaudePlan run={run} />
+        <div className="mt-5 grid grid-cols-2 gap-x-6 gap-y-4 border-t border-border pt-5 sm:grid-cols-4">
+          <div className="col-span-2 sm:col-span-1">
+            <div className={LABEL}>Value now</div>
+            <div className="font-display text-3xl font-semibold tracking-tight text-text tnum">{money(b.equity, 2)}</div>
+            <div className={`font-mono text-sm tnum ${col(b.pnl)}`}>
+              {moneySigned(b.pnl, 2)} ({pct(b.pnlPct)}) all time
+            </div>
           </div>
+          <Stat label="Today (closed)" value={closedToday.length ? moneySigned(todayPnl, 2) : "—"} tone={closedToday.length ? todayPnl : null} />
+          <Stat label="Open positions" value={b.positions.length ? moneySigned(openPnl, 2) : "—"} tone={b.positions.length ? openPnl : null} sub={`${money(b.cash, 2)} cash`} />
+          <Stat
+            label="Win rate"
+            value={decided ? `${Math.round((b.wins / decided) * 100)}%` : "—"}
+            sub={decided ? `${b.wins} won · ${b.losses} lost` : "no closed trades yet"}
+          />
+        </div>
+
+        <p className="mt-4 rounded-lg bg-surface2/70 px-3 py-2 text-xs text-dim">{status}</p>
+      </header>
+
+      {/* ---------- section switcher (sticks while scrolling) ---------- */}
+      <nav className="sticky top-0 z-10 border-y border-border bg-surface/90 px-3 backdrop-blur md:px-5" aria-label={`${b.name} sections`}>
+        <div className="-mb-px flex gap-1 overflow-x-auto">
+          {tabs.map((t) => {
+            const on = section === t.key;
+            return (
+              <button
+                key={t.key}
+                onClick={() => setSection(t.key)}
+                aria-current={on ? "true" : undefined}
+                className={`flex shrink-0 items-center gap-1.5 border-b-2 px-3 py-3 text-sm transition ${on ? "border-text font-semibold text-text" : "border-transparent text-dim hover:text-text"}`}
+              >
+                {t.label}
+                {t.count != null && (
+                  <span className={`rounded-full px-1.5 font-mono text-[10px] tnum ${on ? "bg-text text-surface" : "bg-surface2 text-dim"}`}>{t.count}</span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      </nav>
+
+      <div className="space-y-7 p-5 md:p-6">
+        {section === "now" && (
+          <>
+            {isClaude && (
+              <Block title="What Claude is doing">
+                <div className="rounded-xl border border-border bg-surface2/40 p-4">
+                  <ClaudePlan run={run} />
+                </div>
+              </Block>
+            )}
+
+            <Block title="Open positions" hint={b.positions.length ? "dot = price now · line = your entry" : undefined}>
+              {b.positions.length === 0 ? (
+                <Empty>Nothing open right now.</Empty>
+              ) : (
+                <ul className="grid gap-3 md:grid-cols-2">
+                  {b.positions.map((p) => (
+                    <PositionRow key={p.symbol} p={p} isClaude={isClaude} />
+                  ))}
+                </ul>
+              )}
+            </Block>
+
+            {b.pending.length > 0 && (
+              <Block title="Orders waiting">
+                <ul className="divide-y divide-border rounded-xl border border-border">
+                  {b.pending.map((o, i) => (
+                    <li key={i} className="flex items-baseline justify-between gap-3 px-3.5 py-2.5 text-sm">
+                      <span className="min-w-0">
+                        <span className={`font-semibold ${o.side === "buy" ? "text-gain" : "text-loss"}`}>
+                          {o.side === "sell" && o.kind === "entry" ? "Sell short" : o.side === "buy" && o.kind === "exit" ? "Buy to cover" : o.side === "buy" ? "Buy" : "Sell"}
+                        </span>{" "}
+                        <span className="font-mono tnum text-text">{shares(o.qty)}</span>{" "}
+                        <span className="font-display font-semibold text-text">{o.symbol}</span>
+                        <span className="block font-mono text-[11px] text-faint tnum">
+                          {o.limit != null && `limit $${fprice(o.limit)} · `}
+                          {o.stop != null && `stop ${fprice(o.stop)} · `}
+                          {o.target != null && `target ${fprice(o.target)} · `}
+                          {o.kind === "entry" ? "waiting to fill" : o.stop != null ? "protective stop" : "exit queued"}
+                        </span>
+                      </span>
+                      <span className="shrink-0 font-mono text-[11px] text-faint tnum">{when(o.created_at)}</span>
+                    </li>
+                  ))}
+                </ul>
+              </Block>
+            )}
+          </>
         )}
 
-        <div>
-          <div className={`mb-1 ${LABEL}`}>Positions ({b.positions.length})</div>
-          {b.positions.length === 0 ? (
-            <p className="text-sm text-dim">No positions.</p>
-          ) : (
-            b.positions.map((p) => (
-              <div key={p.symbol} className="border-t border-border py-2 first:border-t-0">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-1.5">
-                      <span className="font-display font-semibold text-text">{p.symbol}</span>
-                      {p.qty < 0 && (
-                        <span className="rounded bg-loss/10 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-loss">Short</span>
-                      )}
-                    </div>
-                    <div className="font-mono text-xs text-faint tnum">
-                      {shares(Math.abs(p.qty))} @ ${fprice(p.avgCost)} · in {when(p.openedAt)}
-                    </div>
-                    <div className="font-mono text-xs text-faint tnum">
-                      {p.stop != null ? (
-                        <span className="text-loss">
-                          stop {p.qty < 0 && "above "}
-                          {fprice(p.stop)}
+        {section === "trades" && (
+          <>
+            <Block title="Today" hint={closedToday.length ? `${moneySigned(todayPnl, 2)} closed` : undefined}>
+              {b.todayTrades.length === 0 ? (
+                <Empty>No trades today.</Empty>
+              ) : (
+                <ul className="divide-y divide-border rounded-xl border border-border">
+                  {b.todayTrades.map((t, i) => (
+                    <li key={i} className="flex items-center justify-between gap-3 px-3.5 py-2.5 text-sm">
+                      <span className="min-w-0">
+                        <span className={`font-semibold ${t.side === "buy" ? "text-gain" : "text-loss"}`}>
+                          {t.role === "short" ? "Sold short" : t.role === "cover" ? "Bought to cover" : t.side === "buy" ? "Bought" : "Sold"}
+                        </span>{" "}
+                        <span className="font-mono text-text tnum">{shares(t.qty)}</span>{" "}
+                        <span className="font-display font-semibold text-text">{t.symbol}</span>
+                        <span className="block font-mono text-[11px] text-faint tnum">
+                          at ${fprice(t.price)} · {when(t.at, false)}
+                        </span>
+                      </span>
+                      {t.pnl != null ? (
+                        <span className={`shrink-0 text-right font-mono font-semibold tnum ${col(t.pnl)}`}>
+                          {moneySigned(t.pnl, 2)}
+                          {exitBasis(t) > 0 && <span className="block text-[11px] font-normal">{pct((t.pnl / exitBasis(t)) * 100)}</span>}
                         </span>
                       ) : (
-                        "no stop on record"
+                        <span className="shrink-0 text-[11px] text-faint">opened</span>
                       )}
-                      {p.target != null && (
-                        <span className="text-gain">
-                          {" "}
-                          · target {p.qty < 0 && "below "}
-                          {fprice(p.target)}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                  <div className="shrink-0 text-right">
-                    <div className="font-mono text-sm text-text tnum">{p.price != null ? `$${fprice(p.price)}` : "—"}</div>
-                    <div className={`font-mono text-xs tnum ${col(p.pnl)}`}>
-                      {p.pnl != null && p.pnlPct != null ? `${moneySigned(p.pnl, 2)} · ${pct(p.pnlPct)}` : "—"}
-                    </div>
-                  </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </Block>
+            <ClosedTrades trades={b.closed} />
+          </>
+        )}
+
+        {section === "runs" && (
+          <>
+            <Block title="Latest run" hint={run ? `${when(run.ran_at)} · ${run.mode}` : "not run yet"}>
+              {run ? (
+                <div className="rounded-xl border border-border bg-surface2/30 p-4">
+                  <RunDetail s={run.summary} error={run.error} mode={run.mode} />
                 </div>
-                {p.reason && (
-                  <p className="mt-1 text-[11px] leading-snug text-dim">
-                    <span className="text-faint">{isClaude ? "Claude's reason: " : "Why: "}</span>
-                    {p.reason}
-                  </p>
-                )}
-              </div>
-            ))
-          )}
-        </div>
-
-        {b.todayTrades.length > 0 && (
-          <div>
-            <div className={`mb-1 ${LABEL}`}>Today&apos;s trades ({b.todayTrades.length})</div>
-            {b.todayTrades.map((t, i) => (
-              <div key={i} className="flex items-baseline justify-between gap-3 border-t border-border py-1.5 text-xs first:border-t-0">
-                <span className="min-w-0">
-                  <span className={`font-semibold ${t.side === "buy" ? "text-gain" : "text-loss"}`}>
-                    {t.role === "short" ? "Sold short" : t.role === "cover" ? "Bought to cover" : t.side === "buy" ? "Bought" : "Sold"}
-                  </span>{" "}
-                  <span className="font-mono text-text tnum">{shares(t.qty)}</span>{" "}
-                  <span className="font-display font-semibold text-text">{t.symbol}</span>{" "}
-                  <span className="font-mono text-dim tnum">at ${fprice(t.price)}</span>
-                </span>
-                <span className="flex shrink-0 items-baseline gap-2">
-                  {t.pnl != null && (
-                    <span className={`font-mono font-semibold tnum ${col(t.pnl)}`}>
-                      {moneySigned(t.pnl, 2)}
-                      {exitBasis(t) > 0 && <span className="font-normal"> ({pct((t.pnl / exitBasis(t)) * 100)})</span>}
-                    </span>
-                  )}
-                  <span className="font-mono text-[11px] text-faint tnum">{when(t.at, false)}</span>
-                </span>
-              </div>
-            ))}
-          </div>
+              ) : (
+                <Empty>This box hasn&apos;t run yet.</Empty>
+              )}
+            </Block>
+            {isClaude && <Timeline runs={b.today} latestId={run?.id ?? null} />}
+            {isClaude && <Replays days={b.replays} />}
+            {!isClaude && <BacktestPanel bookKey={b.key} />}
+          </>
         )}
 
-        <ClosedTrades trades={b.closed} />
-
-        {b.pending.length > 0 && (
-          <div>
-            <div className={`mb-1 ${LABEL}`}>Working orders ({b.pending.length})</div>
-            {b.pending.map((o, i) => (
-              <div key={i} className="border-t border-border py-1.5 font-mono text-xs text-dim tnum first:border-t-0">
-                <span className={o.side === "buy" ? "text-gain" : "text-loss"}>
-                  {o.side === "sell" && o.kind === "entry" ? "SELL SHORT" : o.side === "buy" && o.kind === "exit" ? "BUY TO COVER" : o.side.toUpperCase()}
-                </span>{" "}
-                <span className="font-semibold text-text">
-                  {shares(o.qty)} {o.symbol}
-                </span>
-                {o.limit != null && ` limit $${fprice(o.limit)}`}
-                {o.stop != null && ` · stop ${fprice(o.stop)}`}
-                {o.target != null && ` · target ${fprice(o.target)}`}
-                <span className="text-faint">
-                  {" "}
-                  · {o.kind === "entry" ? "waiting to fill" : o.stop != null ? "protective stop" : "exit queued"} ·{" "}
-                  {when(o.created_at)}
-                </span>
+        {section === "settings" && (
+          <>
+            <Block title={`Limits used${isClaude ? " today" : ""}`}>
+              <div className="rounded-xl border border-border p-4">
+                <LimitsUsed b={b} />
               </div>
-            ))}
-          </div>
+            </Block>
+            <LimitsEditor
+              bookKey={b.key}
+              defs={defs}
+              saved={saved}
+              note={
+                isClaude
+                  ? "These are the repo's own trader/config.json limits. The Mac writes them into this book before every Claude run, and the repo's risk check blocks anything that breaks them."
+                  : "Used by the rules engine from its next run. Book size sets this box's starting cash."
+              }
+            />
+          </>
         )}
-
       </div>
+    </div>
+  );
+}
 
-      <div className="min-w-0 space-y-5">
-        <div>
-          <div className={`mb-2 ${LABEL}`}>Limits used{isClaude ? " today" : ""}</div>
-          <LimitsUsed b={b} />
-        </div>
-
-        <div className="rounded-lg border border-border bg-surface2/40 p-3">
-          <div className="mb-2 flex items-center justify-between gap-3">
-            <span className={LABEL}>Latest run</span>
-            <span className="font-mono text-xs text-dim">{run ? `${when(run.ran_at)} · ${run.mode}` : "not run yet"}</span>
-          </div>
-          {run ? <RunDetail s={run.summary} error={run.error} mode={run.mode} /> : null}
-        </div>
-
-        {isClaude && <Timeline runs={b.today} latestId={run?.id ?? null} />}
-
-        {isClaude && <Replays days={b.replays} />}
-
-        <LimitsEditor
-          bookKey={b.key}
-          defs={defs}
-          saved={saved}
-          note={
-            isClaude
-              ? "These are the repo's own trader/config.json limits. The Mac writes them into this book before every Claude run, and the repo's risk check blocks anything that breaks them."
-              : "Used by the rules engine from its next run. Book size sets this box's starting cash."
-          }
-        />
-
-        {!isClaude && <BacktestPanel bookKey={b.key} />}
-      </div>
-      </div>
+function Stat({ label, value, sub, tone }: { label: string; value: string; sub?: string; tone?: number | null }) {
+  return (
+    <div>
+      <div className={LABEL}>{label}</div>
+      <div className={`font-mono text-lg font-semibold tnum ${tone != null ? col(tone) : "text-text"}`}>{value}</div>
+      {sub && <div className="text-[11px] text-faint">{sub}</div>}
     </div>
   );
 }

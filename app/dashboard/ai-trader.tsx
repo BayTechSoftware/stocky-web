@@ -74,14 +74,19 @@ export default function AiTrader({ ai }: { ai: AiView | null }) {
               <LiveUpdates marketOpen={ai.marketOpen} />
             </div>
             <h2 className="mt-1.5 font-display text-xl font-semibold text-text">AI Trader</h2>
-            <p className="mt-0.5 text-xs text-dim">
-              {ai.books.length} paper books{sizes.length === 1 ? ` of ${money(sizes[0])} each` : ` (${money(startTotal)} in all)`}:{" "}
-              <b>Rules</b> (fixed code, runs on the website on weekday schedules) next to <b>Claude</b> (Claude{" "}
-              {model} running the day-trader-skill repo on your Mac during market hours). Every limit is yours to set
-              in each box. Open
-              any Claude run to see every step: what the repo&apos;s scanner, news, entry, exit, time-machine, budget,
-              risk and broker stages said, and what Claude did with it.
+            <p className="mt-0.5 text-sm text-dim">
+              {ai.books.length} paper boxes{sizes.length === 1 ? ` of ${money(sizes[0])} each` : ` (${money(startTotal)} in all)`}:
+              two run by fixed rules, two by Claude {model}. Open a box&apos;s tab for its details.
             </p>
+            <details className="mt-1.5 text-xs text-dim">
+              <summary className="cursor-pointer select-none text-faint hover:text-text">How it works</summary>
+              <p className="mt-1.5 max-w-prose leading-relaxed">
+                <b>Rules</b> boxes are fixed code that runs on the website on weekday schedules. <b>Claude</b> boxes are
+                Claude running the day-trader-skill repo on your Mac during market hours: it scans, reads the news,
+                times entries and manages exits. Every limit is yours to set in each box&apos;s Limits &amp; settings.
+                Open any Claude run to see every step and what Claude did with it.
+              </p>
+            </details>
           </div>
           <div className="flex shrink-0 gap-2">
             <button
