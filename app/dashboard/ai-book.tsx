@@ -412,18 +412,14 @@ export function BookCard({ b }: { b: AiBookView }) {
         </div>
       </div>
 
-      <div className="space-y-4 p-4">
+      <div className="grid gap-6 p-4 md:p-5 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
+      <div className="min-w-0 space-y-5">
         {isClaude && (
           <div className="rounded-lg border border-accent/30 bg-accent/5 p-3">
             <div className={`mb-2 ${LABEL}`}>What Claude is doing</div>
             <ClaudePlan run={run} />
           </div>
         )}
-
-        <div>
-          <div className={`mb-2 ${LABEL}`}>Limits used{isClaude ? " today" : ""}</div>
-          <LimitsUsed b={b} />
-        </div>
 
         <div>
           <div className={`mb-1 ${LABEL}`}>Positions ({b.positions.length})</div>
@@ -532,6 +528,14 @@ export function BookCard({ b }: { b: AiBookView }) {
           </div>
         )}
 
+      </div>
+
+      <div className="min-w-0 space-y-5">
+        <div>
+          <div className={`mb-2 ${LABEL}`}>Limits used{isClaude ? " today" : ""}</div>
+          <LimitsUsed b={b} />
+        </div>
+
         <div className="rounded-lg border border-border bg-surface2/40 p-3">
           <div className="mb-2 flex items-center justify-between gap-3">
             <span className={LABEL}>Latest run</span>
@@ -557,7 +561,51 @@ export function BookCard({ b }: { b: AiBookView }) {
 
         {!isClaude && <BacktestPanel bookKey={b.key} />}
       </div>
+      </div>
     </div>
+  );
+}
+
+/** One box as a compact tile for the Overview tab. Clicking it opens the box's own tab. */
+export function BookTile({ b, onOpen }: { b: AiBookView; onOpen: () => void }) {
+  const isClaude = b.key.startsWith("claude-");
+  const decided = b.wins + b.losses;
+  const todayPnl = b.todayTrades.reduce((a, t) => a + (t.pnl ?? 0), 0);
+  const hasToday = b.todayTrades.some((t) => t.pnl != null);
+  return (
+    <button
+      onClick={onOpen}
+      className="card group flex w-full flex-col rounded-2xl border border-border bg-surface p-4 text-left transition hover:border-accent/50 hover:bg-surface2/40"
+    >
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-2">
+          <span
+            className={`rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider ${isClaude ? "bg-accent/10 text-accent" : "bg-surface2 text-dim"}`}
+          >
+            {isClaude ? "Claude" : "Rules"}
+          </span>
+          <span className="truncate font-display font-semibold text-text">{b.name}</span>
+        </div>
+        <Spark series={b.series} />
+      </div>
+      <div className="mt-3 font-display text-2xl font-semibold text-text tnum">{money(b.equity, 2)}</div>
+      <div className={`font-mono text-sm tnum ${col(b.pnl)}`}>
+        {moneySigned(b.pnl, 2)} ({pct(b.pnlPct)})
+      </div>
+      <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1 border-t border-border pt-3 text-xs">
+        <dt className="text-faint">Positions</dt>
+        <dd className="text-right font-mono text-text tnum">{b.positions.length}</dd>
+        <dt className="text-faint">Closed today</dt>
+        <dd className={`text-right font-mono tnum ${hasToday ? col(todayPnl) : "text-dim"}`}>
+          {hasToday ? moneySigned(todayPnl, 2) : "—"}
+        </dd>
+        <dt className="text-faint">Win rate</dt>
+        <dd className="text-right font-mono text-text tnum">{decided ? `${Math.round((b.wins / decided) * 100)}% of ${decided}` : "—"}</dd>
+        <dt className="text-faint">Last run</dt>
+        <dd className="truncate text-right font-mono text-dim tnum">{b.lastRun ? when(b.lastRun.ran_at) : "not yet"}</dd>
+      </dl>
+      <span className="mt-3 text-xs text-dim group-hover:text-accent">Open details →</span>
+    </button>
   );
 }
 

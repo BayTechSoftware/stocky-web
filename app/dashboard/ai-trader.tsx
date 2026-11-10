@@ -1,13 +1,13 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { runAiTrader } from "../actions";
 import { money, moneySigned, pct } from "@/lib/portfolio";
 import { RUNNER_LIMITS, effective } from "@/lib/aitrader/limits";
 import type { AiView } from "@/lib/aitrader/view";
 import { LABEL } from "./ai-run";
-import { BookCard, col } from "./ai-book";
+import { BookCard, BookTile, col } from "./ai-book";
 import { ConnectCard, RunnerCard } from "./ai-settings";
 import LiveUpdates from "./ai-live";
 
@@ -15,6 +15,27 @@ export default function AiTrader({ ai }: { ai: AiView | null }) {
   const [msg, setMsg] = useState<{ text: string; err?: boolean } | null>(null);
   const [busy, start] = useTransition();
   const router = useRouter();
+  const [tab, setTab] = useState<string>("overview");
+
+  // Remember the open tab per browser (a convenience only).
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem("ai-tab");
+      // Read after hydration so the server and first client render match.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      if (saved) setTab(saved);
+    } catch {
+      /* storage blocked */
+    }
+  }, []);
+  function pick(t: string) {
+    setTab(t);
+    try {
+      localStorage.setItem("ai-tab", t);
+    } catch {
+      /* storage blocked */
+    }
+  }
 
   if (!ai) {
     return (
@@ -39,6 +60,7 @@ export default function AiTrader({ ai }: { ai: AiView | null }) {
   const startTotal = ai.books.reduce((a, b) => a + b.startCash, 0);
   const sizes = Array.from(new Set(ai.books.map((b) => b.startCash)));
   const model = String(effective(RUNNER_LIMITS, ai.runner).model);
+  const current = ai.books.find((b) => b.key === tab) ?? null;
 
   return (
     <section className="mt-3 space-y-4">
@@ -101,16 +123,43 @@ export default function AiTrader({ ai }: { ai: AiView | null }) {
         {ai.error && <p className="mt-3 rounded-md bg-loss/10 px-3 py-2 text-xs text-loss">{ai.error}</p>}
       </div>
 
-      <div className="grid gap-4 md:grid-cols-2">
-        <ConnectCard connection={ai.connection} />
-        <RunnerCard defs={RUNNER_LIMITS} saved={ai.runner} weekCost={weekCost} />
-      </div>
+      <nav className="-mx-4 overflow-x-auto px-4 md:mx-0 md:px-0" aria-label="AI Trader boxes">
+        <div className="flex min-w-max gap-1 rounded-xl border border-border bg-surface p-1">
+          {[{ key: "overview", name: "Overview", isClaude: null as boolean | null, pnl: null as number | null }, ...ai.books.map((b) => ({ key: b.key as string, name: b.name, isClaude: b.key.startsWith("claude-"), pnl: b.pnl }))].map((t) => {
+            const on = (current?.key ?? "overview") === t.key;
+            return (
+              <button
+                key={t.key}
+                onClick={() => pick(t.key)}
+                aria-current={on ? "page" : undefined}
+                className={`flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm transition ${on ? "bg-surface2 text-text shadow-sm" : "text-dim hover:text-text"}`}
+              >
+                {t.isClaude != null && (
+                  <span className={`h-1.5 w-1.5 rounded-full ${t.isClaude ? "bg-accent" : "bg-faint"}`} aria-hidden />
+                )}
+                <span className="whitespace-nowrap font-medium">{t.name}</span>
+                {t.pnl != null && <span className={`font-mono text-xs tnum ${col(t.pnl)}`}>{moneySigned(t.pnl, 0)}</span>}
+              </button>
+            );
+          })}
+        </div>
+      </nav>
 
-      <div className="grid gap-4 lg:grid-cols-2">
-        {ai.books.map((b) => (
-          <BookCard key={b.key} b={b} />
-        ))}
-      </div>
+      {current ? (
+        <BookCard key={current.key} b={current} />
+      ) : (
+        <>
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+            {ai.books.map((b) => (
+              <BookTile key={b.key} b={b} onOpen={() => pick(b.key)} />
+            ))}
+          </div>
+          <div className="grid gap-4 md:grid-cols-2">
+            <ConnectCard connection={ai.connection} />
+            <RunnerCard defs={RUNNER_LIMITS} saved={ai.runner} weekCost={weekCost} />
+          </div>
+        </>
+      )}
 
       <p className="text-[11px] leading-relaxed text-faint">
         Paper trading only — both the website and the Mac refuse non-paper keys and accounts. Rules books are fixed
