@@ -144,3 +144,51 @@ describe("tradesFromFills pnl", () => {
     expect(t.find((x) => x.side === "buy")?.pnl).toBeNull();
   });
 });
+
+describe("recorded exit reasons (the Mac's exit manager)", () => {
+  const f = (order_id: string, price: number, at = T(16)) => ({ order_id, price, transacted_at: at });
+
+  it("a recorded reason on the fill's own exit row wins over inference", () => {
+    const o: OrderMeta[] = [
+      { alpaca_order_id: "e1", kind: "entry", stop_price: 95, target_price: 120, leg_ids: ["leg-sl", "leg-tp"], reason: "breakout" },
+      { alpaca_order_id: "leg-sl", kind: "exit", reason: "trail", stop_price: 108 },
+      { alpaca_order_id: "x", kind: "exit", client_order_id: "claude-free-x-AMD-1", reason: "claude" },
+      { alpaca_order_id: "mx", kind: "exit", client_order_id: "claude-free-mx-AMD-1", reason: "time" },
+      { alpaca_order_id: "be", kind: "exit", client_order_id: "uuid", reason: "breakeven" },
+    ];
+    expect(inferExitReason(f("leg-sl", 108), o)).toBe("trail"); // the leg alone would read as "stop"
+    expect(inferExitReason(f("x", 100, T(20, 57)), o)).toBe("claude"); // late, but Claude said why
+    expect(inferExitReason(f("mx", 100), o)).toBe("time");
+    expect(inferExitReason(f("be", 100), o)).toBe("breakeven");
+  });
+
+  it("only known codes count: a free-text reason or an entry's reason is ignored", () => {
+    const o: OrderMeta[] = [
+      { alpaca_order_id: "e1", kind: "entry", stop_price: 95, target_price: 120, leg_ids: ["a"], reason: "target" },
+      { alpaca_order_id: "x", kind: "exit", client_order_id: "stk-mylist-x-QYLD-1", reason: "signal turned OVERBOUGHT" },
+    ];
+    expect(inferExitReason(f("a", 95.2), o)).toBe("stop");
+    expect(inferExitReason(f("x", 10), o)).toBe("exit");
+  });
+
+  it("the manager's own ids without a recorded reason", () => {
+    const o: OrderMeta[] = [
+      { alpaca_order_id: "ms", client_order_id: "claude-free-ms-AMD-1" },
+      { alpaca_order_id: "mo", client_order_id: "claude-free-mo-AMD-1" },
+      { alpaca_order_id: "mx", client_order_id: "claude-free-mx-AMD-1" },
+    ];
+    expect(inferExitReason(f("ms", 100), o)).toBe("stop");
+    expect(inferExitReason(f("mo", 100), o)).toBe("target");
+    expect(inferExitReason(f("mx", 100), o)).toBe("exit");
+  });
+
+  it("a partial then a trail: the bigger slice names the trip", () => {
+    const o: OrderMeta[] = [
+      { alpaca_order_id: "e1", kind: "entry", stop_price: 95, target_price: 120, leg_ids: [] },
+      { alpaca_order_id: "p", kind: "exit", reason: "partial" },
+      { alpaca_order_id: "t", kind: "exit", reason: "trail" },
+    ];
+    const st = bookState(5000, [buy("AMD", 10, 100, T(15), "e1"), sell("AMD", 4, 105, T(16), "p"), sell("AMD", 6, 107, T(17), "t")], o);
+    expect(st.closed[0]).toMatchObject({ exitReason: "trail", pnl: 62 });
+  });
+});

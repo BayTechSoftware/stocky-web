@@ -4,7 +4,7 @@ import { useState, useTransition } from "react";
 import { loadRunDetail } from "../actions";
 import { money, moneySigned, pct, price as fprice, shares } from "@/lib/portfolio";
 import { CLAUDE_LIMITS, defsForBook, effective, rulesDefs } from "@/lib/aitrader/limits";
-import type { AiBookView, AiReplayDay, AiRun, AiRunLite, ClosedTrade, ExitReason } from "@/lib/aitrader/view";
+import type { AiBookView, AiReplayDay, AiReview, AiRun, AiRunLite, ClosedTrade, ExitReason } from "@/lib/aitrader/view";
 import { ClaudePlan, LABEL, RunDetail, col, when } from "./ai-run";
 import { BacktestPanel } from "./ai-backtest";
 import { LimitsEditor } from "./ai-settings";
@@ -267,6 +267,71 @@ function ReplayDay({ d }: { d: AiReplayDay }) {
   );
 }
 
+/** The Mac's after-close reviews (bin/reviewer.py → ai_reviews), newest day first. */
+function DailyReviews({ reviews }: { reviews: AiReview[] }) {
+  const [all, setAll] = useState(false);
+  if (!reviews.length) {
+    return (
+      <Block title="Daily review">
+        <Empty>No review yet. After each trading day&apos;s close the Mac writes one here.</Empty>
+      </Block>
+    );
+  }
+  const shown = all ? reviews : reviews.slice(0, 1);
+  return (
+    <Block title="Daily review" hint="written after the close; its lessons are what Claude reads the next morning">
+      <ul className="space-y-2.5">
+        {shown.map((r) => {
+          const s = r.stats;
+          const reasons = Object.entries(s.exit_reasons ?? {})
+            .map(([k, n]) => `${REASON_LABEL[k as ExitReason] ?? k} ${n}`)
+            .join(" · ");
+          return (
+            <li key={r.day} className="rounded-xl border border-border bg-surface2/30 p-4">
+              <div className="mb-1.5 flex flex-wrap items-baseline justify-between gap-2">
+                <span className="font-display text-sm font-semibold text-text">{reviewDay(r.day)}</span>
+                <span className="font-mono text-[11px] text-dim tnum">
+                  {s.trades != null && `${s.trades} trade${s.trades === 1 ? "" : "s"}`}
+                  {s.wins != null && s.trades ? ` · ${s.wins} won` : ""}
+                  {s.pnl != null && <span className={col(s.pnl)}> · {moneySigned(s.pnl, 2)}</span>}
+                  {s.avg_r != null && ` · avg ${s.avg_r.toFixed(2)}R`}
+                </span>
+              </div>
+              {r.summary && <p className="text-sm leading-relaxed text-text">{r.summary}</p>}
+              {r.lessons.length > 0 && (
+                <div className="mt-2.5">
+                  <div className={`mb-1 ${LABEL}`}>Lessons for tomorrow</div>
+                  <ol className="list-decimal space-y-1 pl-5 text-[13px] leading-snug text-dim">
+                    {r.lessons.map((l, i) => (
+                      <li key={i}>{l}</li>
+                    ))}
+                  </ol>
+                </div>
+              )}
+              <div className="mt-2 font-mono text-[10.5px] text-faint tnum">
+                {reasons && `exits: ${reasons}`}
+                {s.model && `${reasons ? " · " : ""}${s.model}`}
+                {r.costUsd != null && ` · $${r.costUsd.toFixed(3)}`}
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+      {reviews.length > 1 && (
+        <button onClick={() => setAll(!all)} className="mt-2 text-xs font-medium text-accent hover:underline">
+          {all ? "Show the latest only" : `Show the last ${reviews.length} days`}
+        </button>
+      )}
+    </Block>
+  );
+}
+
+/** "Tue, Nov 10" from "2026-11-10" (a calendar day: no time zone shift). */
+function reviewDay(day: string): string {
+  const [y, m, d] = day.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" });
+}
+
 /** Claude replays of past days (simulated on the Mac; never in this box's ledger). */
 function Replays({ days }: { days: AiReplayDay[] }) {
   if (!days.length) return null;
@@ -286,10 +351,26 @@ function Replays({ days }: { days: AiReplayDay[] }) {
   );
 }
 
-const REASON_LABEL: Record<ExitReason, string> = { stop: "Stop", target: "Target", "close-out": "Close-out", claude: "Claude", exit: "Exit" };
+const REASON_LABEL: Record<ExitReason, string> = {
+  stop: "Stop",
+  target: "Target",
+  trail: "Trailing stop",
+  breakeven: "Breakeven",
+  partial: "Partial",
+  time: "Time stop",
+  market: "Market turned",
+  "close-out": "Close-out",
+  claude: "Claude",
+  exit: "Exit",
+};
 const REASON_CLS: Record<ExitReason, string> = {
   stop: "bg-loss/10 text-loss",
   target: "bg-gain/10 text-gain",
+  trail: "bg-gain/10 text-gain",
+  breakeven: "bg-surface2 text-dim",
+  partial: "bg-gain/10 text-gain",
+  time: "bg-surface2 text-dim",
+  market: "bg-accent/10 text-accent",
   "close-out": "bg-surface2 text-dim",
   claude: "bg-accent/10 text-accent",
   exit: "bg-surface2 text-dim",
@@ -647,6 +728,7 @@ export function BookCard({ b }: { b: AiBookView }) {
                 <Empty>This box hasn&apos;t run yet.</Empty>
               )}
             </Block>
+            {isClaude && <DailyReviews reviews={b.reviews} />}
             {isClaude && <Timeline runs={b.today} latestId={run?.id ?? null} />}
             {isClaude && <Replays days={b.replays} />}
             {!isClaude && <BacktestPanel bookKey={b.key} />}

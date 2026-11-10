@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   CLAUDE_LIMITS,
+  EXIT_LIMITS,
   SCORECARD_GATES,
   SCORECARD_WEIGHTS,
   RULES_LIMITS,
@@ -30,6 +31,8 @@ describe("contract tables", () => {
         "max_vwap_atr", "max_adr_used", "extension_penalty",
         ...SCORECARD_GATES.map((g) => `gate_${g}`),
         ...Object.keys(SCORECARD_WEIGHTS).map((k) => `w_${k}`),
+        "breakeven_at_r", "trail_mode", "trail_start_r", "trail_atr_mult", "trail_pct", "partial_pct", "partial_r",
+        "time_stop_min", "time_stop_min_r", "time_stop_mode", "market_turn_mode", "market_turn_pct", "review", "review_model",
       ].sort()
     );
     expect(keys(RUNNER_LIMITS)).toEqual(
@@ -263,5 +266,32 @@ describe("scorecard settings", () => {
     expect(v).toMatchObject({ gate_rvol: "block", w_rsi: 100, min_score: 0, max_spread_pct: 0.2, scorecard: false, earnings_window_days: 3 });
     const bad = validateLimits(CLAUDE_LIMITS, { gate_trend: "maybe" });
     expect(bad.ok).toBe(false);
+  });
+});
+
+describe("exit settings", () => {
+  it("has the contract's defaults (docs/SETTINGS_CONTRACT.md, Exits)", () => {
+    const d = Object.fromEntries(EXIT_LIMITS.map((x) => [x.key, x.def]));
+    expect(d).toEqual({
+      breakeven_at_r: 1, trail_mode: "atr", trail_start_r: 1, trail_atr_mult: 2, trail_pct: 1, partial_pct: 0, partial_r: 1,
+      time_stop_min: 120, time_stop_min_r: 0.3, time_stop_mode: "wake", market_turn_mode: "wake", market_turn_pct: 0.5,
+      review: true, review_model: "haiku",
+    });
+    expect(EXIT_LIMITS.every((x) => x.group === "Exits")).toBe(true);
+    expect(defsForBook("claude-free").filter((x) => x.group === "Exits")).toHaveLength(EXIT_LIMITS.length);
+    expect(defsForBook("free").some((x) => x.group === "Exits")).toBe(false);
+  });
+
+  it("validates and clamps like the Mac", () => {
+    const v = ok(
+      validateLimits(CLAUDE_LIMITS, {
+        partial_pct: "250", trail_mode: "pct", time_stop_min: "90.6", time_stop_mode: "exit", review: "off", review_model: "sonnet",
+        breakeven_at_r: "-1",
+      })
+    );
+    expect(v).toMatchObject({ partial_pct: 100, trail_mode: "pct", time_stop_min: 91, time_stop_mode: "exit", review: false, review_model: "sonnet", breakeven_at_r: 0 });
+    const bad = validateLimits(CLAUDE_LIMITS, { trail_mode: "wild", market_turn_mode: "panic" });
+    expect(bad.ok).toBe(false);
+    expect(effective(CLAUDE_LIMITS, {}).trail_mode).toBe("atr");
   });
 });

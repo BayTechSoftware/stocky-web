@@ -143,6 +143,12 @@ describe("Claude order kinds", () => {
     ["sell", "claude-mylist-fx-AMD-202611101015", "fx", "exit"],
     ["buy", "claude-mylist-S-202611101015", null, "entry"], // ticker S, long
     ["buy", "claude-mylist-X-202611101015", null, "entry"], // ticker X, long
+    ["buy", "claude-free-mo-AMD-20261110101500ab", "mo", "exit"], // the exit manager's OCO protecting a short
+    ["sell", "claude-free-mo-AMD-20261110101500ab", "mo", "exit"],
+    ["buy", "claude-free-ms-AMD-20261110101500ab", "ms", "exit"],
+    ["buy", "claude-free-mx-AMD-20261110101500ab", "mx", "exit"], // a partial cover
+    ["sell", "claude-free-mx-AMD-20261110101500ab", "mx", "exit"],
+    ["buy", "claude-mylist-MO-202611101015", null, "entry"], // ticker MO (Altria), long
     ["sell", "", null, "exit"],
   ])("%s %s", (side, id, role, kind) => {
     expect(claudeOrderRole(id)).toBe(role);

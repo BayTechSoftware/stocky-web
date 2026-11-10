@@ -8,12 +8,14 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { createAdminClient } from "@/lib/supabase/admin";
 import * as A from "@/lib/alpaca";
 import { bookState, fillRole, ledgerFills, shortOrderIds, type ClosedTrade, type FillRole, type OrderMeta } from "./ledger";
+import { reviewsFrom, type AiReview } from "./reviews";
 import { tradesFromFills } from "./live";
 import { loadCreds, type ReplayInfo, type RunSummary, type RunUsage } from "./engine";
 import { groupReplays, type AiReplayDay } from "./replays";
 
 export type { AiReplayDay, AiReplayStep } from "./replays";
 export type { ClosedTrade, ExitReason } from "./ledger";
+export type { AiReview } from "./reviews";
 
 /** Closed round trips kept per book in the view. */
 const CLOSED_CAP = 100;
@@ -71,6 +73,8 @@ export interface AiBookView {
   today: AiRunLite[];
   /** Claude replay days (mode "claude-replay"), newest first — simulated, never in the ledger. */
   replays: AiReplayDay[];
+  /** After-close reviews (Claude boxes; ai_reviews), newest day first; [] until the table exists. */
+  reviews: AiReview[];
   /** This box's saved limits (validated on save; defaults apply where missing). */
   settings: Record<string, number | string>;
   weekCostUsd: number;
@@ -143,7 +147,7 @@ export async function loadAiView(
   const ids = books.map((b) => b.id as string);
   const claudeIds = books.filter((b) => String(b.key).startsWith("claude-")).map((b) => b.id as string);
 
-  const [fillsR, ordersR, roleOrdersR, metaR, eqR, todayR, weekR, replayR, connR, runnerR, ...latestR] = await Promise.all([
+  const [fillsR, ordersR, roleOrdersR, metaR, eqR, todayR, weekR, replayR, reviewsR, connR, runnerR, ...latestR] = await Promise.all([
     supabase.from("ai_fills").select("book_id, order_id, symbol, side, qty, price, transacted_at").in("book_id", ids),
     supabase
       .from("ai_orders")
@@ -196,6 +200,15 @@ export async function loadAiView(
           .order("ran_at", { ascending: false })
           .limit(600)
       : Promise.resolve({ data: [] as Record<string, unknown>[] }),
+    // After-close reviews (supabase/ai_reviews.sql). Before the table exists this returns an error: no reviews.
+    claudeIds.length
+      ? supabase
+          .from("ai_reviews")
+          .select("book_id, day, summary, lessons, stats, cost_usd")
+          .in("book_id", claudeIds)
+          .order("day", { ascending: false })
+          .limit(40)
+      : Promise.resolve({ data: [] as Record<string, unknown>[], error: null }),
     supabase.from("broker_connections").select("account_hint, connected_at").maybeSingle(),
     supabase.from("ai_runner").select("settings").maybeSingle(),
     // Each box's latest real run in full (replays never count as the latest run).
@@ -386,6 +399,7 @@ export async function loadAiView(
             replay: (r.replay as ReplayInfo | null) ?? null,
           }))
       ).slice(0, 30),
+      reviews: reviewsR.error ? [] : reviewsFrom(reviewsR.data, b.id as string),
       settings: (b.settings as Record<string, number | string> | null) ?? {},
       weekCostUsd: weekCost.get(b.id as string) ?? 0,
       series: eq.filter((e) => e.book_id === b.id).map((e) => ({ as_of: e.as_of as string, equity: e.equity as number })),

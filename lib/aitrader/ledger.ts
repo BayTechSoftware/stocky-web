@@ -41,7 +41,23 @@ export interface BookState {
   exitPnl: Map<string, number>;
 }
 
-export type ExitReason = "stop" | "target" | "close-out" | "claude" | "exit";
+export type ExitReason =
+  | "stop"
+  | "target"
+  | "trail"
+  | "breakeven"
+  | "partial"
+  | "time"
+  | "market"
+  | "close-out"
+  | "claude"
+  | "exit";
+
+/** The reasons the Mac records on ai_orders.reason for kind=exit rows (stocky-trader bin/exit_manager.py REASON_CODES). */
+export const RECORDED_EXIT_REASONS: readonly ExitReason[] = [
+  "stop", "target", "trail", "breakeven", "partial", "time", "market", "close-out", "claude",
+];
+const isRecorded = (r: unknown): r is ExitReason => typeof r === "string" && (RECORDED_EXIT_REASONS as readonly string[]).includes(r);
 
 /** One completed round trip in a single symbol: position goes 0 -> non-zero -> 0. */
 export interface ClosedTrade {
@@ -82,7 +98,9 @@ function nyMinutes(iso: string): number {
 const CLOSE_OUT_FROM_MIN = 15 * 60 + 30;
 
 /**
- * Why an exit fill happened. Exit reasons aren't stored, so this infers it:
+ * Why an exit fill happened. The reason the Mac recorded wins: a kind=exit row for the fill's own order
+ * whose `reason` is one of RECORDED_EXIT_REASONS (the exit manager's stops, OCOs and exits, a bracket leg
+ * it moved, the fraction's orders, Claude's own -x- exits). Older trades have none, so it is inferred:
  * bracket legs by which price they hit (the leg order in leg_ids isn't reliable), the Mac's
  * fraction orders (-fs- stop / -fx- target or close-out) and Claude's -x- exits by client id and time.
  */
@@ -92,6 +110,8 @@ export function inferExitReason(
 ): ExitReason {
   const id = fill.order_id;
   if (!id) return "exit";
+  const own = orders.find((x) => x.alpaca_order_id === id && x.kind === "exit" && isRecorded(x.reason));
+  if (own) return own.reason as ExitReason;
   const parent = orders.find((o) => o.leg_ids?.includes(id));
   if (parent) {
     const s = parent.stop_price ?? null;
@@ -106,7 +126,9 @@ export function inferExitReason(
   if (o.reason && CLOSE_OUT_RE.test(o.reason)) return "close-out";
   const cid = o.client_order_id ?? "";
   const role = claudeOrderRole(cid);
-  if (role === "fs") return "stop";
+  if (role === "fs" || role === "ms") return "stop";
+  if (role === "mo") return "target"; // an OCO's parent is its take-profit limit
+  if (role === "mx") return "exit";
   if (role === "x" || role === "fx") {
     if (nyMinutes(fill.transacted_at) >= CLOSE_OUT_FROM_MIN) return "close-out";
     return role === "fx" ? "target" : "claude";

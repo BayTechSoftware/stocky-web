@@ -168,6 +168,28 @@ export const SCORECARD_LIMITS: LimitDef[] = [
   ),
 ];
 
+/**
+ * Smart exits (stocky-trader bin/exit_manager.py): the Mac manages each Claude box's open trades every
+ * minute between runs. R = the distance from the entry to the initial stop. A stop only moves toward the
+ * price. Also the after-close review (bin/reviewer.py). Mirrors docs/SETTINGS_CONTRACT.md "Exits".
+ */
+export const EXIT_LIMITS: LimitDef[] = [
+  { key: "breakeven_at_r", group: "Exits", label: "Stop to breakeven at", unit: "×", kind: "number", min: 0, max: 20, def: 1, hint: "R in profit (best price since entry); the stop moves to the entry. 0 = off" },
+  { key: "trail_mode", group: "Exits", label: "Trailing stop", kind: "select", options: ["off", "atr", "pct"], def: "atr", hint: "atr: a multiple of the 5-minute ATR(14) behind the best price; pct: a % behind it" },
+  { key: "trail_start_r", group: "Exits", label: "Trail starts at", unit: "×", kind: "number", min: 0, max: 20, def: 1, hint: "R in profit" },
+  { key: "trail_atr_mult", group: "Exits", label: "Trail distance (× ATR)", unit: "×", kind: "number", min: 0.1, max: 20, def: 2 },
+  { key: "trail_pct", group: "Exits", label: "Trail distance (%)", unit: "%", kind: "number", min: 0.05, max: 50, def: 1, hint: "used when the trailing stop is pct" },
+  { key: "partial_pct", group: "Exits", label: "Take part off", unit: "%", kind: "number", min: 0, max: 100, def: 0, hint: "of the whole shares, once, at the R below; the rest keeps a stop and target. 0 = off" },
+  { key: "partial_r", group: "Exits", label: "…at", unit: "×", kind: "number", min: 0.1, max: 20, def: 1, hint: "R in profit" },
+  { key: "time_stop_min", group: "Exits", label: "Time stop after", unit: "min", kind: "number", min: 0, max: 1440, int: true, def: 120, hint: "market minutes since the entry; 0 = off" },
+  { key: "time_stop_min_r", group: "Exits", label: "…unless it reached", unit: "×", kind: "number", min: 0, max: 20, def: 0.3, hint: "R in profit by then" },
+  { key: "time_stop_mode", group: "Exits", label: "When the time stop hits", kind: "select", options: ["off", "wake", "exit"], def: "wake", hint: "wake: Claude looks and decides; exit: the Mac sells" },
+  { key: "market_turn_mode", group: "Exits", label: "When the market turns", kind: "select", options: ["off", "wake", "exit"], def: "wake", hint: "SPY (or the stock's sector ETF) crosses VWAP against the trade, or SPY moves the % below against it" },
+  { key: "market_turn_pct", group: "Exits", label: "Market turn: SPY move against", unit: "%", kind: "number", min: 0.05, max: 20, def: 0.5, hint: "since the entry" },
+  { key: "review", group: "Exits", label: "Daily review after the close", kind: "bool", def: true, hint: "one cheap Claude call per box per trading day; writes lessons Claude reads the next morning. Counts toward the weekly cap" },
+  { key: "review_model", group: "Exits", label: "Review model", kind: "select", options: ["haiku", "sonnet", "opus"], def: "haiku", hint: "haiku once usage passes the slow-down %" },
+];
+
 export const CLAUDE_LIMITS: LimitDef[] = [
   // Risk & size
   { key: "budget", group: "Risk & size", label: "Book size", unit: "$", kind: "number", min: 100, max: 1_000_000, def: 5000, hint: "what the repo sizes from" },
@@ -196,6 +218,7 @@ export const CLAUDE_LIMITS: LimitDef[] = [
   { key: "allow_loosen_stop", group: "Risk & size", label: "Let Claude move a stop further away", kind: "bool", def: false, hint: "off = a stop can only be tightened. A stop is always kept" },
   { key: "allow_short", group: "Risk & size", label: "Allow short selling", kind: "bool", def: false, hint: "lets Claude bet a stock will fall. Whole shares only. A sudden jump up can lose more than the stop. Only stocks no other box holds or has an order on" },
   ...SCORECARD_LIMITS,
+  ...EXIT_LIMITS,
 ];
 
 export const RUNNER_LIMITS: LimitDef[] = [

@@ -30,7 +30,7 @@ export function ownerOf(clientOrderId: string): string | null {
   return null;
 }
 
-export type ClaudeRole = "s" | "x" | "f" | "fs" | "fx";
+export type ClaudeRole = "s" | "x" | "f" | "fs" | "fx" | "mo" | "ms" | "mx";
 
 /**
  * The role marker in a Claude client_order_id, or null for a plain long entry.
@@ -39,14 +39,18 @@ export type ClaudeRole = "s" | "x" | "f" | "fs" | "fx";
 export function claudeOrderRole(clientOrderId: string): ClaudeRole | null {
   const key = ownerOf(clientOrderId);
   if (!key?.startsWith("claude-")) return null;
-  const m = clientOrderId.slice(key.length + 1).match(/^(fs|fx|f|s|x)-/);
+  const m = clientOrderId.slice(key.length + 1).match(/^(fs|fx|f|s|x|mo|ms|mx)-/);
   return m ? (m[1] as ClaudeRole) : null;
 }
 
-/** ai_orders.kind for a Claude order: short entries are sells, covers are buys. */
+/** The Mac's exit manager (stocky-trader bin/exit_manager.py): an OCO (-mo-), a stand-alone stop (-ms-), a market exit (-mx-). */
+const EXIT_ROLES = new Set<ClaudeRole>(["x", "fs", "fx", "mo", "ms", "mx"]);
+
+/** ai_orders.kind for a Claude order: short entries are sells, covers (and the Mac's exits of a short) are buys. */
 export function claudeOrderKind(side: string, clientOrderId: string): "entry" | "exit" {
   const role = claudeOrderRole(clientOrderId);
-  return (side === "buy" && role !== "x") || role === "s" ? "entry" : "exit";
+  if (role && EXIT_ROLES.has(role)) return "exit";
+  return side === "buy" || role === "s" ? "entry" : "exit";
 }
 
 const num = (v: string | null | undefined) => (v == null || v === "" ? null : Number(v));
