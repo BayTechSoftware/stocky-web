@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   CLAUDE_LIMITS,
+  SCORECARD_GATES,
+  SCORECARD_WEIGHTS,
   RULES_LIMITS,
   RUNNER_LIMITS,
   defsForBook,
@@ -24,6 +26,10 @@ describe("contract tables", () => {
         "max_order_usd", "max_position_pct", "cash_buffer_pct", "min_reward_risk", "no_entries_before",
         "no_entries_after", "flat_by", "blocked", "allow_reentry", "fractional", "allow_margin", "allow_short",
         "min_order_usd", "or_minutes", "margin_multiplier", "pdt_guard", "min_stop_pct", "allow_loosen_stop",
+        "scorecard", "min_score", "max_spread_pct", "min_avg_dollar_vol", "min_rvol", "earnings_window_days",
+        "max_vwap_atr", "max_adr_used", "extension_penalty",
+        ...SCORECARD_GATES.map((g) => `gate_${g}`),
+        ...Object.keys(SCORECARD_WEIGHTS).map((k) => `w_${k}`),
       ].sort()
     );
     expect(keys(RUNNER_LIMITS)).toEqual(
@@ -230,5 +236,32 @@ describe("orders", () => {
     expect(isStaleEntry("2026-11-09T22:30:00Z", now, RULES)).toBe(true); // 24h > 20h
     expect(isStaleEntry("2026-11-10T14:00:00Z", now, RULES)).toBe(false);
     expect(isStaleEntry("2026-11-09T22:30:00Z", now, rulesFor({ entry_valid_days: 2 }))).toBe(false); // 44h window
+  });
+});
+
+describe("scorecard settings", () => {
+  it("has 12 gates (tradability blocks by default) and weights that sum to 100", () => {
+    expect(SCORECARD_GATES).toHaveLength(12);
+    const gate = (g: string) => CLAUDE_LIMITS.find((d) => d.key === `gate_${g}`)!;
+    expect(gate("tradability").def).toBe("block");
+    for (const g of SCORECARD_GATES) if (g !== "tradability") expect(gate(g).def).toBe("warn");
+    expect(Object.values(SCORECARD_WEIGHTS).reduce((a, b) => a + b, 0)).toBe(100);
+    const e = effective(CLAUDE_LIMITS, {});
+    expect([e.scorecard, e.min_score, e.max_spread_pct, e.min_avg_dollar_vol, e.min_rvol, e.earnings_window_days]).toEqual([
+      true, 0, 0.5, 5_000_000, 1, 1,
+    ]);
+    expect([e.max_vwap_atr, e.max_adr_used, e.extension_penalty, e.gate_extension]).toEqual([1.5, 2, 15, "warn"]);
+  });
+
+  it("validates modes, clamps weights and thresholds", () => {
+    const v = ok(
+      validateLimits(CLAUDE_LIMITS, {
+        gate_rvol: "block", w_rsi: "250", min_score: "-5", max_spread_pct: "0.2", scorecard: "false",
+        earnings_window_days: "2.6",
+      })
+    );
+    expect(v).toMatchObject({ gate_rvol: "block", w_rsi: 100, min_score: 0, max_spread_pct: 0.2, scorecard: false, earnings_window_days: 3 });
+    const bad = validateLimits(CLAUDE_LIMITS, { gate_trend: "maybe" });
+    expect(bad.ok).toBe(false);
   });
 });

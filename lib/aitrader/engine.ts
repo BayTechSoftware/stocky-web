@@ -83,6 +83,34 @@ export interface Decision {
   target?: number;
   reason: string;
   trigger?: string; // Claude: what would make it act on a stock it's watching
+  /** Claude books: the scorecard (stocky-trader bin/rate.py) for this stock and direction, when it was rated. */
+  score?: number | null;
+  scorecard?: DecisionScorecard;
+}
+
+/** One gate of a scorecard: s = pass / fail / na, m = the owner's mode, v = the numbers. */
+export interface ScorecardGateRow {
+  k: string;
+  s?: "pass" | "fail" | "na" | string;
+  m?: "off" | "warn" | "block" | string;
+  v?: string;
+}
+
+/** The compact scorecard a decision carries (docs/SETTINGS_CONTRACT.md "Scorecard"). Older decisions have none. */
+export interface DecisionScorecard {
+  v?: number;
+  dir?: "long" | "short" | string;
+  at?: string;
+  score?: number | null;
+  gates?: ScorecardGateRow[];
+  parts?: { k: string; w?: number; s?: number | null }[];
+  blocked?: string[];
+  failed?: string[];
+  warned?: string[];
+  support?: string[];
+  why?: string;
+  /** Points taken off the score, e.g. { extension: 15 } for a chase. */
+  penalty?: Record<string, number>;
 }
 
 /** One thing Claude did during a run (from its stream-json transcript, recorded on the Mac). */

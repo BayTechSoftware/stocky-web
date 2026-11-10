@@ -74,6 +74,100 @@ export const RULES_LIMITS: LimitDef[] = [
   { key: "universe_remove", group: "Universe", label: "Remove from the universe", kind: "symbols", def: "", only: "free", hint: "comma-separated tickers" },
 ];
 
+/**
+ * The scorecard (stocky-trader bin/rate.py): before an entry Claude rates its shortlist on the owner's
+ * checklist — 11 gates (pass / fail / n/a) and a 0–100 score from weighted components. A gate on
+ * "block" (or a score under min_score) is enforced by the Mac's guard; "warn" only informs Claude.
+ * Mirrors docs/SETTINGS_CONTRACT.md "Scorecard" and stocky-trader bin/scorecard.py.
+ */
+export const SCORECARD_GATES = [
+  "tradability", "catalyst", "market", "sector", "rel_strength", "rvol", "levels", "trend", "trigger", "room", "rr_size",
+  "extension",
+] as const;
+export type ScorecardGate = (typeof SCORECARD_GATES)[number];
+
+export const SCORECARD_GATE_LABEL: Record<string, string> = {
+  tradability: "Tradable (spread, $ volume, borrow)",
+  catalyst: "Catalyst (news / earnings)",
+  market: "Market direction (SPY, QQQ)",
+  sector: "Sector direction",
+  rel_strength: "Relative strength",
+  rvol: "Relative volume",
+  levels: "Key level (support / resistance)",
+  trend: "Trend structure",
+  trigger: "Setup trigger",
+  room: "Room to the next level",
+  rr_size: "Reward : risk and size fit",
+  extension: "Not extended (no chasing)",
+};
+
+const SCORECARD_GATE_HINT: Record<string, string> = {
+  tradability: "spread ≤ max spread and 20-day $ volume ≥ the minimum; shorts: shortable and easy to borrow",
+  catalyst: "tagged news since the last close, or earnings within the window — a flag",
+  market: "SPY and QQQ above their VWAP and the prior close (below for a short)",
+  sector: "the stock's SPDR sector ETF (SMH for chips) the same way",
+  rel_strength: "the stock beats SPY since the open and since the prior close",
+  rvol: "today's volume vs the 20-day average at the same time of day",
+  levels: "trading beyond the opening-range or prior-day high (low for a short)",
+  trend: "higher highs and higher lows on 5-minute swings (lower for a short)",
+  trigger: "the entry rule (opening-range breakout or a level) fired and is holding",
+  room: "distance to the next level, in multiples of the risk, ≥ min reward : risk",
+  rr_size: "planned reward : risk ≥ the minimum, and the trade fits the size limits",
+  extension: "flags a chase: price too far past VWAP (in 5-min ATRs) or too much of the usual daily range used; extended scores lose points",
+};
+
+/** Default weights (sum 100). Weights are relative: the score is normalised over the components with data. */
+export const SCORECARD_WEIGHTS: Record<string, number> = {
+  tradability: 8, catalyst: 8, market: 8, sector: 6, rel_strength: 8, rvol: 8, levels: 2, trend: 8, trigger: 6,
+  room: 8, rr_size: 6, extension: 8, vwap: 2, ema: 2, rsi: 3, macd: 3, float: 2, fundamentals: 2, valuation: 2,
+};
+
+export const SCORECARD_PART_LABEL: Record<string, string> = {
+  ...SCORECARD_GATE_LABEL,
+  vwap: "Price vs VWAP",
+  ema: "9 / 20 EMA",
+  rsi: "RSI (14)",
+  macd: "MACD (12, 26, 9)",
+  float: "Float turnover",
+  fundamentals: "Fundamentals",
+  valuation: "Valuation vs sector",
+};
+
+export const SCORECARD_LIMITS: LimitDef[] = [
+  { key: "scorecard", group: "Scorecard", label: "Scorecard before every entry", kind: "bool", def: true, hint: "off = Claude can still rate stocks; nothing is enforced" },
+  { key: "min_score", group: "Scorecard", label: "Minimum score to enter", unit: "", kind: "number", min: 0, max: 100, def: 0, hint: "0 = advisory only (Claude prefers higher scores but decides)" },
+  { key: "max_spread_pct", group: "Scorecard", label: "Max bid/ask spread", unit: "%", kind: "number", min: 0.01, max: 100, def: 0.5, hint: "of the price, from Alpaca's (15-min delayed) national best bid/offer" },
+  { key: "min_avg_dollar_vol", group: "Scorecard", label: "Min average dollar volume", unit: "$", kind: "number", min: 0, max: 1_000_000_000_000, def: 5_000_000, hint: "per day, 20-day average" },
+  { key: "min_rvol", group: "Scorecard", label: "Min relative volume", unit: "×", kind: "number", min: 0, max: 100, def: 1, hint: "vs the 20-day average at the same time of day" },
+  { key: "earnings_window_days", group: "Scorecard", label: "Earnings counts as a catalyst within", unit: "days", kind: "number", min: 0, max: 30, int: true, def: 1 },
+  { key: "max_vwap_atr", group: "Scorecard", label: "Extended: beyond VWAP by more than", unit: "×", kind: "number", min: 0.1, max: 20, def: 1.5, hint: "5-minute ATRs above VWAP (below for a short) — past this a breakout is a chase" },
+  { key: "max_adr_used", group: "Scorecard", label: "Extended: daily range used more than", unit: "×", kind: "number", min: 0.1, max: 20, def: 2, hint: "the day's move so far vs the stock's 20-day average daily range" },
+  { key: "extension_penalty", group: "Scorecard", label: "Score points off an extended stock", unit: "", kind: "number", min: 0, max: 100, def: 15, hint: "on top of the extension weight; 0 = only the weight" },
+  ...SCORECARD_GATES.map(
+    (g): LimitDef => ({
+      key: `gate_${g}`,
+      group: "Scorecard gates",
+      label: SCORECARD_GATE_LABEL[g],
+      kind: "select",
+      options: ["off", "warn", "block"],
+      def: g === "tradability" ? "block" : "warn",
+      hint: SCORECARD_GATE_HINT[g],
+    })
+  ),
+  ...Object.entries(SCORECARD_WEIGHTS).map(
+    ([k, w]): LimitDef => ({
+      key: `w_${k}`,
+      group: "Scorecard weights",
+      label: SCORECARD_PART_LABEL[k] ?? k,
+      unit: "",
+      kind: "number",
+      min: 0,
+      max: 100,
+      def: w,
+    })
+  ),
+];
+
 export const CLAUDE_LIMITS: LimitDef[] = [
   // Risk & size
   { key: "budget", group: "Risk & size", label: "Book size", unit: "$", kind: "number", min: 100, max: 1_000_000, def: 5000, hint: "what the repo sizes from" },
@@ -101,6 +195,7 @@ export const CLAUDE_LIMITS: LimitDef[] = [
   { key: "min_stop_pct", group: "Risk & size", label: "Tightest allowed stop", unit: "%", kind: "number", min: 0, max: 90, def: 0.05, hint: "of the price; 0 = off" },
   { key: "allow_loosen_stop", group: "Risk & size", label: "Let Claude move a stop further away", kind: "bool", def: false, hint: "off = a stop can only be tightened. A stop is always kept" },
   { key: "allow_short", group: "Risk & size", label: "Allow short selling", kind: "bool", def: false, hint: "lets Claude bet a stock will fall. Whole shares only. A sudden jump up can lose more than the stop. Only stocks no other box holds or has an order on" },
+  ...SCORECARD_LIMITS,
 ];
 
 export const RUNNER_LIMITS: LimitDef[] = [
