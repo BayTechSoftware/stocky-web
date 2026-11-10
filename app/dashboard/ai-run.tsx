@@ -1,6 +1,8 @@
 "use client";
 
-import type { Decision, PipelineStep, RunSummary, TraceItem } from "@/lib/aitrader/engine";
+import type { Decision, DecisionScorecard, PipelineStep, RunSummary, TraceItem } from "@/lib/aitrader/engine";
+import { SCORECARD_GATE_LABEL, SCORECARD_PART_LABEL } from "@/lib/aitrader/limits";
+import { gateCounts, gateTone, scoreBand, scoreOf, scorecardOf, type GateTone } from "@/lib/aitrader/scorecard";
 import { price as fprice, shares } from "@/lib/portfolio";
 
 export const LABEL = "text-[10px] font-semibold uppercase tracking-wider text-faint";
@@ -15,6 +17,7 @@ export function col(v: number | null | undefined) {
 const STAGES: { key: string; name: string }[] = [
   { key: "scanner", name: "Scanner" },
   { key: "news", name: "News" },
+  { key: "scorecard", name: "Scorecard" },
   { key: "entry", name: "Entry" },
   { key: "exit", name: "Exit plan" },
   { key: "timemachine", name: "Time machine" },
@@ -51,6 +54,105 @@ export function ActionPill({ a }: { a: Decision["action"] }) {
     <span className={`h-fit shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide ${cls}`}>
       {a === "short" ? "sell short" : a === "cover" ? "buy to cover" : a}
     </span>
+  );
+}
+
+const BAND_CLS: Record<string, string> = {
+  high: "bg-gain/10 text-gain ring-gain/25",
+  mid: "bg-watch/10 text-watch ring-watch/25",
+  low: "bg-loss/10 text-loss ring-loss/25",
+  none: "bg-surface2 text-faint ring-border",
+};
+
+/** A decision's 0–100 scorecard score as a small chip. */
+export function ScoreChip({ score }: { score: number | null }) {
+  return (
+    <span
+      title="Scorecard score (0–100)"
+      className={`h-fit shrink-0 rounded px-1.5 py-0.5 font-mono text-[10px] font-bold tnum ring-1 ring-inset ${BAND_CLS[scoreBand(score)]}`}
+    >
+      {score == null ? "n/a" : score}
+    </span>
+  );
+}
+
+const GATE_ICON: Record<GateTone, { icon: string; cls: string; word: string }> = {
+  pass: { icon: "✓", cls: "text-gain", word: "pass" },
+  warn: { icon: "!", cls: "text-watch", word: "warn" },
+  block: { icon: "✕", cls: "text-loss", word: "blocks" },
+  "fail-off": { icon: "·", cls: "text-faint", word: "off" },
+  na: { icon: "–", cls: "text-faint", word: "n/a" },
+};
+
+/** A decision's scorecard: gates with pass / warn / fail icons and their numbers, then the component scores. */
+export function ScorecardView({ card }: { card: DecisionScorecard }) {
+  const gates = card.gates ?? [];
+  const parts = (card.parts ?? []).filter((p) => (p.w ?? 0) > 0);
+  return (
+    <details className="mt-1">
+      <summary className="flex cursor-pointer list-none items-center gap-2 text-[11px] text-dim hover:text-text">
+        <ScoreChip score={card.score ?? null} />
+        <span>
+          scorecard{card.dir ? ` (${card.dir})` : ""}
+          {gateCounts(card) ? ` — ${gateCounts(card)}` : ""}
+          {card.at ? <span className="text-faint"> · {card.at.slice(11) || card.at} NY</span> : null}
+        </span>
+      </summary>
+      <div className="mt-1 space-y-2 rounded-md bg-surface2/60 p-2">
+        {card.blocked && card.blocked.length > 0 && (
+          <ul className="space-y-0.5 text-[11px] text-loss">
+            {card.blocked.map((b, i) => (
+              <li key={i}>Blocked: {b}</li>
+            ))}
+          </ul>
+        )}
+        {card.penalty?.extension ? (
+          <p className="text-[11px] text-watch">
+            Extended — a chase: −{card.penalty.extension} points. A pullback to VWAP is the better entry.
+          </p>
+        ) : null}
+        {card.why && <p className="text-[11px] text-text">Claude: {card.why}</p>}
+        {gates.length > 0 ? (
+          <ul className="space-y-0.5">
+            {gates.map((g) => {
+              const tone = GATE_ICON[gateTone(g)];
+              return (
+                <li key={g.k} className={`flex gap-2 text-[11px] ${g.m === "off" ? "opacity-50" : ""}`}>
+                  <span className={`w-3 shrink-0 text-center font-bold ${tone.cls}`} aria-label={tone.word}>
+                    {tone.icon}
+                  </span>
+                  <span className="w-[150px] shrink-0 text-dim">
+                    {SCORECARD_GATE_LABEL[g.k] ?? g.k}
+                    {g.m === "block" && <span className="ml-1 text-[9px] uppercase tracking-wide text-faint">block</span>}
+                  </span>
+                  <span className="min-w-0 font-mono text-[10.5px] text-text tnum">{g.v || "—"}</span>
+                </li>
+              );
+            })}
+          </ul>
+        ) : (
+          <p className="text-[11px] text-dim">
+            {card.support?.length ? `Supports: ${card.support.join(", ")}. ` : ""}
+            {card.warned?.length ? `Warns: ${card.warned.join(", ")}.` : ""}
+          </p>
+        )}
+        {parts.length > 0 && (
+          <div className="grid grid-cols-[auto_1fr_auto] items-center gap-x-2 gap-y-0.5 text-[10.5px]">
+            {parts.map((p) => (
+              <div key={p.k} className="contents">
+                <span className="text-faint">{SCORECARD_PART_LABEL[p.k] ?? p.k}</span>
+                <span className="h-1 overflow-hidden rounded-full bg-surface">
+                  {p.s != null && <span className="block h-full rounded-full bg-accent" style={{ width: `${Math.round(p.s * 100)}%` }} />}
+                </span>
+                <span className="font-mono text-faint tnum">
+                  {p.s == null ? "n/a" : Math.round(p.s * 100)} · w{p.w}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </details>
   );
 }
 
@@ -137,12 +239,20 @@ export function ClaudePlan({
             <ul className="mt-1 space-y-1.5">
               {items.map((d, i) => {
                 const deal = dealLine(d);
+                const card = scorecardOf(d);
+                const score = scoreOf(d);
                 return (
                   <li key={i} className="text-[13px] leading-snug">
+                    {score != null && !card && (
+                      <span className="mr-1.5 align-middle">
+                        <ScoreChip score={score} />
+                      </span>
+                    )}
                     <span className="font-display font-semibold text-text">{d.symbol || "All"}</span>
                     {d.reason && <span className="text-dim"> — {d.reason}</span>}
                     {d.trigger && <div className="text-xs text-accent">Would buy if: {d.trigger}</div>}
                     {deal && <div className="font-mono text-xs text-faint tnum">{deal}</div>}
+                    {card && <ScorecardView card={card} />}
                   </li>
                 );
               })}
@@ -162,6 +272,7 @@ export function Decisions({ decisions, limit }: { decisions: Decision[]; limit?:
       {shown.map((d, i) => (
         <li key={i} className="flex gap-2 text-xs">
           <ActionPill a={d.action} />
+          {scoreOf(d) != null && <ScoreChip score={scoreOf(d)} />}
           <span className="min-w-0">
             <span className="font-semibold text-text">{d.symbol}</span>
             {pos(d.qty) && pos(d.price) && (
@@ -175,6 +286,7 @@ export function Decisions({ decisions, limit }: { decisions: Decision[]; limit?:
               </span>
             )}
             <span className="text-dim"> — {d.reason}</span>
+            {scorecardOf(d) && <ScorecardView card={scorecardOf(d)!} />}
           </span>
         </li>
       ))}
