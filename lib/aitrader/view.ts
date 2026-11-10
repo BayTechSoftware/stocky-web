@@ -7,12 +7,16 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { createAdminClient } from "@/lib/supabase/admin";
 import * as A from "@/lib/alpaca";
-import { bookState, fillRole, ledgerFills, shortOrderIds, type FillRole } from "./ledger";
+import { bookState, fillRole, ledgerFills, shortOrderIds, type ClosedTrade, type FillRole, type OrderMeta } from "./ledger";
 import { tradesFromFills } from "./live";
 import { loadCreds, type ReplayInfo, type RunSummary, type RunUsage } from "./engine";
 import { groupReplays, type AiReplayDay } from "./replays";
 
 export type { AiReplayDay, AiReplayStep } from "./replays";
+export type { ClosedTrade, ExitReason } from "./ledger";
+
+/** Closed round trips kept per book in the view. */
+const CLOSED_CAP = 100;
 
 export interface AiPositionView {
   symbol: string;
@@ -60,7 +64,9 @@ export interface AiBookView {
   pending: AiOrderView[];
   lastRun: AiRun | null;
   /** Everything bought or sold today (NY day), newest first. */
-  todayTrades: { at: string; symbol: string; side: string; qty: number; price: number; role: FillRole }[];
+  todayTrades: { at: string; symbol: string; side: string; qty: number; price: number; role: FillRole; pnl: number | null }[];
+  /** Completed round trips (flat -> position -> flat), newest first, capped at 100. */
+  closed: ClosedTrade[];
   /** Today's runs (NY day), newest first, without the heavy trace — open one to load it. Replays excluded. */
   today: AiRunLite[];
   /** Claude replay days (mode "claude-replay"), newest first — simulated, never in the ledger. */
@@ -137,7 +143,7 @@ export async function loadAiView(
   const ids = books.map((b) => b.id as string);
   const claudeIds = books.filter((b) => String(b.key).startsWith("claude-")).map((b) => b.id as string);
 
-  const [fillsR, ordersR, roleOrdersR, eqR, todayR, weekR, replayR, connR, runnerR, ...latestR] = await Promise.all([
+  const [fillsR, ordersR, roleOrdersR, metaR, eqR, todayR, weekR, replayR, connR, runnerR, ...latestR] = await Promise.all([
     supabase.from("ai_fills").select("book_id, order_id, symbol, side, qty, price, transacted_at").in("book_id", ids),
     supabase
       .from("ai_orders")
@@ -151,6 +157,13 @@ export async function loadAiView(
       .select("alpaca_order_id, side, kind")
       .in("book_id", ids)
       .or("and(kind.eq.entry,side.eq.sell),and(kind.eq.exit,side.eq.buy)"),
+    // Order ids, legs and stops for every order, to explain how each closed trip started and ended.
+    supabase
+      .from("ai_orders")
+      .select("book_id, alpaca_order_id, leg_ids, kind, client_order_id, reason, stop_price, target_price")
+      .in("book_id", ids)
+      .order("created_at", { ascending: false })
+      .limit(1000),
     supabase.from("ai_equity").select("book_id, as_of, equity").in("book_id", ids).order("as_of", { ascending: true }),
     // Today's Claude runs, light fields only (the trace can be tens of KB per run).
     claudeIds.length
@@ -247,7 +260,11 @@ export async function loadAiView(
   }
 
   const views: AiBookView[] = books.map((b) => {
-    const st = bookState(b.start_cash as number, ledgerFills(fills.filter((f) => f.book_id === b.id), shortEntries));
+    const st = bookState(
+      b.start_cash as number,
+      ledgerFills(fills.filter((f) => f.book_id === b.id), shortEntries),
+      ((metaR.data ?? []) as (OrderMeta & { book_id: string })[]).filter((o) => o.book_id === b.id)
+    );
     // A short's stop and target legs fill as buys under the entry's row, so the ledger names those.
     const coverIds = new Set([...covers, ...st.coverOrderIds]);
     const bookOrders = orders.filter((o) => o.book_id === b.id);
@@ -316,7 +333,8 @@ export async function loadAiView(
           price: f.price as number,
           transacted_at: f.transacted_at as string,
           role: fillRole(f.side as string, f.order_id as string, shortEntries, coverIds),
-        }))
+        })),
+      st.exitPnl
     );
     const today: AiRunLite[] =((todayR.data ?? []) as Record<string, unknown>[])
       .filter((r) => r.book_id === b.id)
@@ -353,6 +371,7 @@ export async function loadAiView(
       pending,
       lastRun: run,
       todayTrades,
+      closed: st.closed.slice().reverse().slice(0, CLOSED_CAP),
       today,
       replays: groupReplays(
         ((replayR.data ?? []) as Record<string, unknown>[])

@@ -4,7 +4,7 @@ import { useState, useTransition } from "react";
 import { loadRunDetail } from "../actions";
 import { money, moneySigned, pct, price as fprice, shares } from "@/lib/portfolio";
 import { CLAUDE_LIMITS, defsForBook, effective, rulesDefs } from "@/lib/aitrader/limits";
-import type { AiBookView, AiReplayDay, AiRun, AiRunLite } from "@/lib/aitrader/view";
+import type { AiBookView, AiReplayDay, AiRun, AiRunLite, ClosedTrade, ExitReason } from "@/lib/aitrader/view";
 import { ClaudePlan, LABEL, RunDetail, col, when } from "./ai-run";
 import { BacktestPanel } from "./ai-backtest";
 import { LimitsEditor } from "./ai-settings";
@@ -286,6 +286,86 @@ function Replays({ days }: { days: AiReplayDay[] }) {
   );
 }
 
+const REASON_LABEL: Record<ExitReason, string> = { stop: "Stop", target: "Target", "close-out": "Close-out", claude: "Claude", exit: "Exit" };
+const REASON_CLS: Record<ExitReason, string> = {
+  stop: "bg-loss/10 text-loss",
+  target: "bg-gain/10 text-gain",
+  "close-out": "bg-surface2 text-dim",
+  claude: "bg-accent/10 text-accent",
+  exit: "bg-surface2 text-dim",
+};
+
+/** "2h 05m" / "45m" / "3d 4h" */
+function held(min: number): string {
+  if (min < 60) return `${min}m`;
+  if (min < 1440) return `${Math.floor(min / 60)}h ${String(min % 60).padStart(2, "0")}m`;
+  return `${Math.floor(min / 1440)}d ${Math.floor((min % 1440) / 60)}h`;
+}
+
+/** Entry cost of the shares an exit closed: proceeds less profit for a sell, cover cost plus profit for a cover. */
+function exitBasis(t: AiBookView["todayTrades"][number]): number {
+  return t.pnl == null ? 0 : t.qty * t.price - (t.side === "sell" ? t.pnl : -t.pnl);
+}
+
+/** Every completed round trip, newest first: what each close made or lost. */
+function ClosedTrades({ trades }: { trades: ClosedTrade[] }) {
+  const [open, setOpen] = useState(true);
+  const [all, setAll] = useState(false);
+  if (!trades.length) return null;
+  const shown = all ? trades : trades.slice(0, 10);
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className={`mb-1 flex w-full items-center justify-between gap-2 text-left ${LABEL}`}
+      >
+        <span>Closed trades ({trades.length})</span>
+        <span aria-hidden>{open ? "−" : "+"}</span>
+      </button>
+      {open && (
+        <>
+          {shown.map((t, i) => (
+            <div key={`${t.symbol}-${t.closedAt}-${i}`} className="border-t border-border py-2 text-xs first:border-t-0">
+              <div className="flex items-baseline justify-between gap-3">
+                <span className="flex min-w-0 flex-wrap items-baseline gap-x-1.5">
+                  <span className="font-display font-semibold text-text">{t.symbol}</span>
+                  <span
+                    className={`rounded px-1 py-px text-[9.5px] font-bold uppercase tracking-wider ${t.direction === "long" ? "bg-gain/10 text-gain" : "bg-loss/10 text-loss"}`}
+                  >
+                    {t.direction}
+                  </span>
+                  <span className="font-mono text-dim tnum">{shares(t.qty)}</span>
+                  <span className="font-mono text-dim tnum">
+                    ${fprice(t.avgEntry)} → ${fprice(t.avgExit)}
+                  </span>
+                </span>
+                <span className={`shrink-0 text-right font-mono font-semibold tnum ${col(t.pnl)}`}>
+                  {moneySigned(t.pnl, 2)} <span className="font-normal">({pct(t.pnlPct)})</span>
+                </span>
+              </div>
+              <div className="mt-0.5 flex flex-wrap items-center justify-between gap-x-3 gap-y-0.5 text-[11px]">
+                <span className="flex items-center gap-2">
+                  <span className={`rounded px-1.5 py-px text-[10px] font-semibold ${REASON_CLS[t.exitReason]}`}>{REASON_LABEL[t.exitReason]}</span>
+                  {t.r != null && <span className={`font-mono tnum ${col(t.r)}`}>{(t.r < 0 ? "−" : "+") + Math.abs(t.r).toFixed(1)}R</span>}
+                  <span className="font-mono text-faint tnum">held {held(t.holdMinutes)}</span>
+                </span>
+                <span className="font-mono text-faint tnum">{when(t.closedAt)}</span>
+              </div>
+            </div>
+          ))}
+          {trades.length > 10 && (
+            <button type="button" onClick={() => setAll((v) => !v)} className="mt-1 text-[11px] text-accent hover:underline">
+              {all ? "Show fewer" : `Show all ${trades.length}`}
+            </button>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 export function BookCard({ b }: { b: AiBookView }) {
   const isClaude = b.key.startsWith("claude-");
   const run = b.lastRun;
@@ -412,11 +492,21 @@ export function BookCard({ b }: { b: AiBookView }) {
                   <span className="font-display font-semibold text-text">{t.symbol}</span>{" "}
                   <span className="font-mono text-dim tnum">at ${fprice(t.price)}</span>
                 </span>
-                <span className="shrink-0 font-mono text-[11px] text-faint tnum">{when(t.at, false)}</span>
+                <span className="flex shrink-0 items-baseline gap-2">
+                  {t.pnl != null && (
+                    <span className={`font-mono font-semibold tnum ${col(t.pnl)}`}>
+                      {moneySigned(t.pnl, 2)}
+                      {exitBasis(t) > 0 && <span className="font-normal"> ({pct((t.pnl / exitBasis(t)) * 100)})</span>}
+                    </span>
+                  )}
+                  <span className="font-mono text-[11px] text-faint tnum">{when(t.at, false)}</span>
+                </span>
               </div>
             ))}
           </div>
         )}
+
+        <ClosedTrades trades={b.closed} />
 
         {b.pending.length > 0 && (
           <div>

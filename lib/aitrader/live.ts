@@ -135,17 +135,19 @@ export function planLiveSync(
 
 /** One line per order for a box's "Today's trades": partial fills merged, newest first. */
 export function tradesFromFills(
-  fills: { order_id: string; symbol: string; side: string; qty: number; price: number; transacted_at: string; role?: FillRole }[]
-): { at: string; symbol: string; side: string; qty: number; price: number; role: FillRole }[] {
-  const by = new Map<string, { at: string; symbol: string; side: string; qty: number; cost: number; role: FillRole }>();
+  fills: { order_id: string; symbol: string; side: string; qty: number; price: number; transacted_at: string; role?: FillRole }[],
+  /** Realized P&L per exit order (from the ledger); orders not in it (entries, basis-less sells) get null. */
+  pnlByOrder?: Map<string, number>
+): { at: string; symbol: string; side: string; qty: number; price: number; role: FillRole; pnl: number | null }[] {
+  const by = new Map<string, { id: string; at: string; symbol: string; side: string; qty: number; cost: number; role: FillRole }>();
   for (const f of fills) {
-    const t = by.get(f.order_id) ?? { at: f.transacted_at, symbol: f.symbol, side: f.side, qty: 0, cost: 0, role: f.role ?? null };
+    const t = by.get(f.order_id) ?? { id: f.order_id, at: f.transacted_at, symbol: f.symbol, side: f.side, qty: 0, cost: 0, role: f.role ?? null };
     t.qty += f.qty;
     t.cost += f.qty * f.price;
     if (f.transacted_at < t.at) t.at = f.transacted_at;
     by.set(f.order_id, t);
   }
   return Array.from(by.values())
-    .map((t) => ({ at: t.at, symbol: t.symbol, side: t.side, qty: t.qty, price: t.qty > 0 ? t.cost / t.qty : 0, role: t.role }))
+    .map((t) => ({ at: t.at, symbol: t.symbol, side: t.side, qty: t.qty, price: t.qty > 0 ? t.cost / t.qty : 0, role: t.role, pnl: pnlByOrder?.get(t.id) ?? null }))
     .sort((a, b) => (a.at < b.at ? 1 : -1));
 }
