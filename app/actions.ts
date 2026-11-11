@@ -24,9 +24,14 @@ import { redirect } from "next/navigation";
 import { randomBytes, createHash } from "node:crypto";
 import type { Lot } from "@/lib/portfolio";
 import { FinnhubError, fetchFinnhubQuote } from "@/lib/livequotes";
+import { allow } from "@/lib/ratelimit";
 
 /** One Twelve Data request stays within the free-tier 8-credits/minute budget. */
 const REFRESH_BATCH = 8;
+
+/** Per-user rate limits (lib/ratelimit.ts): each add spends a Twelve Data credit, each refresh up to 8. */
+const ADD_TICKER_LIMIT = { max: 10, windowMs: 60_000 };
+const REFRESH_LIMIT = { max: 1, windowMs: 60_000 };
 
 /** Compute a signal for one symbol right away (best-effort; never blocks the UI
  *  on failure). Used when a ticker is first added so its metrics aren't blank
@@ -62,6 +67,7 @@ export async function addTicker(formData: FormData) {
   if (!symbol) return;
   const { supabase, user } = await uid();
   if (!user) return;
+  if (!allow(`addTicker:${user.id}`, ADD_TICKER_LIMIT.max, ADD_TICKER_LIMIT.windowMs)) return;
   const { count } = await supabase
     .from("watchlist")
     .select("*", { count: "exact", head: true })
@@ -88,6 +94,9 @@ export async function refreshSignals(): Promise<
   if (!user) return { error: "not signed in" };
   const apiKey = process.env.TWELVE_DATA_API_KEY;
   if (!apiKey) return { error: "market data not configured" };
+  if (!allow(`refreshSignals:${user.id}`, REFRESH_LIMIT.max, REFRESH_LIMIT.windowMs)) {
+    return { error: "signals were just refreshed — try again in a minute" };
+  }
 
   const { data: wl } = await supabase.from("watchlist").select("symbol").eq("user_id", user.id);
   const symbols = Array.from(new Set((wl ?? []).map((r) => r.symbol as string)));
