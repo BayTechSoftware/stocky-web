@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  CHECK_LIMITS,
   CLAUDE_LIMITS,
   EXIT_LIMITS,
   SCORECARD_GATES,
@@ -31,9 +32,10 @@ describe("contract tables", () => {
         "max_vwap_atr", "max_adr_used", "extension_penalty",
         ...SCORECARD_GATES.map((g) => `gate_${g}`),
         ...Object.keys(SCORECARD_WEIGHTS).map((k) => `w_${k}`),
+        "bear_mode", "bear_block_conf", "bear_model", "memory_trades", "sentiment", "w_sentiment",
         "breakeven_at_r", "trail_mode", "trail_start_r", "trail_atr_mult", "trail_pct", "partial_pct", "partial_r",
         "time_stop_min", "time_stop_min_r", "time_stop_mode", "market_turn_mode", "market_turn_pct", "review", "review_model",
-        "use_lessons", "lessons_count",
+        "use_lessons", "lessons_count", "shadow_review",
       ].sort()
     );
     expect(keys(RUNNER_LIMITS)).toEqual(
@@ -276,7 +278,7 @@ describe("exit settings", () => {
     expect(d).toEqual({
       breakeven_at_r: 1, trail_mode: "atr", trail_start_r: 1, trail_atr_mult: 2, trail_pct: 1, partial_pct: 0, partial_r: 1,
       time_stop_min: 120, time_stop_min_r: 0.3, time_stop_mode: "wake", market_turn_mode: "wake", market_turn_pct: 0.5,
-      review: true, review_model: "haiku", use_lessons: true, lessons_count: 8,
+      review: true, shadow_review: true, review_model: "haiku", use_lessons: true, lessons_count: 8,
     });
     expect(EXIT_LIMITS.every((x) => x.group === "Exits")).toBe(true);
     expect(defsForBook("claude-free").filter((x) => x.group === "Exits")).toHaveLength(EXIT_LIMITS.length);
@@ -294,5 +296,55 @@ describe("exit settings", () => {
     const bad = validateLimits(CLAUDE_LIMITS, { trail_mode: "wild", market_turn_mode: "panic" });
     expect(bad.ok).toBe(false);
     expect(effective(CLAUDE_LIMITS, {}).trail_mode).toBe("atr");
+  });
+});
+
+describe("check settings (bear case, trade memory, sentiment)", () => {
+  it("has the contract's defaults and bounds (docs/SETTINGS_CONTRACT.md, Checks)", () => {
+    expect(Object.fromEntries(CHECK_LIMITS.map((x) => [x.key, x.def]))).toEqual({
+      bear_mode: "warn", bear_block_conf: 70, bear_model: "haiku", memory_trades: 5, sentiment: "off", w_sentiment: 10,
+    });
+    const d = (k: string) => CLAUDE_LIMITS.find((x) => x.key === k)!;
+    expect(d("bear_mode").options).toEqual(["off", "warn", "block"]);
+    expect(d("bear_model").options).toEqual(["haiku", "sonnet", "opus"]);
+    expect(d("sentiment").options).toEqual(["off", "stocktwits"]);
+    expect([d("bear_block_conf").min, d("bear_block_conf").max, d("bear_block_conf").int]).toEqual([0, 100, true]);
+    expect([d("memory_trades").min, d("memory_trades").max, d("memory_trades").int]).toEqual([0, 20, true]);
+    expect([d("w_sentiment").min, d("w_sentiment").max, d("w_sentiment").kind]).toEqual([0, 100, "number"]);
+    expect(d("shadow_review")).toMatchObject({ kind: "bool", def: true, group: "Exits" });
+  });
+
+  it("Claude boxes only; the Checks group sits right after the scorecard groups", () => {
+    expect(defsForBook("mylist").some((x) => x.group === "Checks" || x.key === "shadow_review")).toBe(false);
+    expect(defsForBook("free").some((x) => x.group === "Checks")).toBe(false);
+    const groups = Array.from(new Set(CLAUDE_LIMITS.map((x) => x.group)));
+    expect(groups.indexOf("Checks")).toBe(groups.indexOf("Scorecard weights") + 1);
+    // unique keys across the whole Claude table
+    expect(new Set(CLAUDE_LIMITS.map((x) => x.key)).size).toBe(CLAUDE_LIMITS.length);
+  });
+
+  it("leaves the scorecard weights (sum 100) and their defaults alone", () => {
+    expect(SCORECARD_WEIGHTS.sentiment).toBeUndefined();
+    expect(Object.values(SCORECARD_WEIGHTS).reduce((a, b) => a + b, 0)).toBe(100);
+    const e = effective(CLAUDE_LIMITS, {});
+    for (const [k, w] of Object.entries(SCORECARD_WEIGHTS)) expect(e[`w_${k}`], k).toBe(w);
+    expect(e.w_sentiment).toBe(10);
+  });
+
+  it("validates and clamps", () => {
+    const v = ok(
+      validateLimits(CLAUDE_LIMITS, {
+        bear_mode: "block", bear_block_conf: "150", bear_model: "opus", memory_trades: "3.4", sentiment: "stocktwits",
+        w_sentiment: "-3", shadow_review: "off",
+      })
+    );
+    expect(v).toEqual({
+      bear_mode: "block", bear_block_conf: 100, bear_model: "opus", memory_trades: 3, sentiment: "stocktwits", w_sentiment: 0,
+      shadow_review: false,
+    });
+    expect(validateLimits(CLAUDE_LIMITS, { bear_mode: "maybe" }).ok).toBe(false);
+    expect(validateLimits(CLAUDE_LIMITS, { sentiment: "reddit" }).ok).toBe(false);
+    expect(validateLimits(CLAUDE_LIMITS, { bear_model: "gpt" }).ok).toBe(false);
+    expect(ok(validateLimits(CLAUDE_LIMITS, { memory_trades: "0", bear_block_conf: "0" }))).toEqual({ memory_trades: 0, bear_block_conf: 0 });
   });
 });

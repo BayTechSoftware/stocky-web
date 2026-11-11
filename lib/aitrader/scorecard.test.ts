@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { gateCounts, gateTone, scoreBand, scoreOf, scorecardOf } from "./scorecard";
+import { bearOf, gateCounts, gateTone, scoreBand, scoreOf, scorecardOf } from "./scorecard";
 import type { Decision } from "./engine";
 
 const base: Decision = { symbol: "ACME", action: "buy", reason: "r" };
@@ -49,5 +49,24 @@ describe("decision scorecards", () => {
 
   it("bands", () => {
     expect([scoreBand(80), scoreBand(55), scoreBand(10), scoreBand(null)]).toEqual(["high", "mid", "low", "none"]);
+  });
+});
+
+describe("bear check", () => {
+  it("absent or junk → nothing", () => {
+    expect(bearOf(base)).toBeNull();
+    expect(bearOf({ bear: "against" })).toBeNull();
+    expect(bearOf({ bear: [] })).toBeNull();
+    expect(bearOf({ bear: { verdict: "doom", confidence: 90 } })).toBeNull();
+    expect(bearOf({ bear: { confidence: 90 } })).toBeNull();
+  });
+
+  it("cleans the verdict, confidence and case", () => {
+    expect(bearOf({ bear: { verdict: "against", confidence: 80, case: "  Fading volume.  " } })).toEqual({
+      verdict: "against", confidence: 80, case: "Fading volume.",
+    });
+    expect(bearOf({ bear: { verdict: "Mixed", confidence: 140.2 } })).toEqual({ verdict: "mixed", confidence: 100, case: "" });
+    expect(bearOf({ bear: { verdict: "weak", confidence: "high", case: 3 } })).toEqual({ verdict: "weak", confidence: null, case: "" });
+    expect(bearOf({ bear: { verdict: "unavailable" } })).toEqual({ verdict: "unavailable", confidence: null, case: "" });
   });
 });

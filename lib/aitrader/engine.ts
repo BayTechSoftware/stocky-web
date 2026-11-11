@@ -86,6 +86,15 @@ export interface Decision {
   /** Claude books: the scorecard (stocky-trader bin/rate.py) for this stock and direction, when it was rated. */
   score?: number | null;
   scorecard?: DecisionScorecard;
+  /** Claude books: the bear check — a separate Claude call's case against the trade (read with bearOf()). */
+  bear?: DecisionBear;
+}
+
+/** The case against a trade (stocky-trader bear check). confidence is 0–100. */
+export interface DecisionBear {
+  verdict: "against" | "mixed" | "weak" | "unavailable";
+  confidence?: number | null;
+  case?: string;
 }
 
 /** One gate of a scorecard: s = pass / fail / na, m = the owner's mode, v = the numbers. */

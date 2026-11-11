@@ -4,7 +4,8 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { loadRunDetail, removeNote } from "../actions";
 import { money, moneySigned, pct, price as fprice, shares } from "@/lib/portfolio";
-import { CLAUDE_LIMITS, defsForBook, effective, rulesDefs } from "@/lib/aitrader/limits";
+import { CLAUDE_LIMITS, SCORECARD_GATE_LABEL, defsForBook, effective, rulesDefs } from "@/lib/aitrader/limits";
+import { gateVerdict, marketLine, signedPct, type AiReviewShadow, type AiReviewTrade, type AiShadowItem } from "@/lib/aitrader/reviews";
 import type { AiBookView, AiNote, AiReplayDay, AiReview, AiRun, AiRunLite, ClosedTrade, ExitReason } from "@/lib/aitrader/view";
 import { ClaudePlan, LABEL, RunDetail, col, when } from "./ai-run";
 import { BacktestPanel } from "./ai-backtest";
@@ -392,6 +393,9 @@ function DailyReviews({ reviews, notes, settings }: { reviews: AiReview[]; notes
                   </span>
                 </div>
                 {r.summary && <p className="text-sm leading-relaxed text-text">{r.summary}</p>}
+                {marketLine(s) && <p className="mt-1.5 font-mono text-[11px] leading-snug text-dim tnum">{marketLine(s)}</p>}
+                {s.closed && s.closed.length > 0 && <DayTrades trades={s.closed} />}
+                {s.shadow && <TradesNotTaken sh={s.shadow} />}
                 {written > 0 && (
                   <details className="mt-2 text-[12px] text-dim">
                     <summary className="cursor-pointer select-none text-faint hover:text-dim">
@@ -426,6 +430,131 @@ function DailyReviews({ reviews, notes, settings }: { reviews: AiReview[]; notes
         </button>
       )}
     </Block>
+  );
+}
+
+const signedR = (r: number) => `${r < 0 ? "−" : "+"}${Math.abs(r).toFixed(1)}R`;
+const DIR_WORD = { long: "bought", short: "sold short" } as const;
+
+/** One closed trade of the day: symbol, direction, result $, and how it did against the market. */
+function DayTradeRow({ t }: { t: AiReviewTrade }) {
+  return (
+    <li className="flex flex-wrap items-baseline gap-x-2 text-[12px]">
+      <span className="font-display font-semibold text-text">{t.symbol}</span>
+      {t.direction && <span className="text-[11px] text-faint">{DIR_WORD[t.direction]}</span>}
+      {t.pnl != null && <span className={`font-mono tnum ${col(t.pnl)}`}>{moneySigned(t.pnl, 2)}</span>}
+      {t.alpha_pct != null && (
+        <span className={`font-mono text-[11px] tnum ${col(t.alpha_pct)}`}>vs market {signedPct(t.alpha_pct)}</span>
+      )}
+      {t.sector && t.sector_pct != null && (
+        <span className="font-mono text-[10.5px] text-faint tnum">
+          · {t.sector} {signedPct(t.sector_pct)}
+        </span>
+      )}
+    </li>
+  );
+}
+
+/** The day's closed trades; folded away when there are more than a few. */
+function DayTrades({ trades }: { trades: AiReviewTrade[] }) {
+  const list = (
+    <ul className="mt-1 space-y-0.5">
+      {trades.map((t, i) => (
+        <DayTradeRow key={`${t.symbol}${i}`} t={t} />
+      ))}
+    </ul>
+  );
+  if (trades.length <= 3) {
+    return (
+      <div className="mt-2">
+        <div className={LABEL}>The day&apos;s trades</div>
+        {list}
+      </div>
+    );
+  }
+  return (
+    <details className="mt-2">
+      <summary className={`cursor-pointer select-none ${LABEL} hover:text-dim`}>The day&apos;s trades ({trades.length})</summary>
+      {list}
+    </details>
+  );
+}
+
+const WHY_WORD: Record<string, string> = { skip: "skipped", blocked: "blocked", "not chosen": "not chosen" };
+const RESULT_WORD: Record<string, { word: string; cls: string }> = {
+  target: { word: "would have hit the target", cls: "text-gain" },
+  stop: { word: "would have hit the stop", cls: "text-loss" },
+  open: { word: "still open at the close", cls: "text-dim" },
+};
+const VERDICT_CLS = { helped: "text-gain", "cost you": "text-loss", even: "text-dim" } as const;
+const gateName = (g: string) => SCORECARD_GATE_LABEL[g] ?? g.replace(/_/g, " ");
+
+function ShadowRow({ it }: { it: AiShadowItem }) {
+  const res = it.result ? RESULT_WORD[it.result] : null;
+  return (
+    <li className="text-[12px] leading-snug">
+      <span className="font-display font-semibold text-text">{it.symbol}</span>
+      {it.dir && <span className="text-[11px] text-faint"> {it.dir === "short" ? "short" : "buy"}</span>}
+      {it.why && <span className="text-[11px] text-faint"> · {WHY_WORD[it.why]}</span>}
+      {it.score != null && <span className="font-mono text-[11px] text-faint tnum"> · score {it.score}</span>}
+      {it.at && <span className="font-mono text-[11px] text-faint tnum"> · {it.at}</span>}
+      {res && <span className={`text-[11px] ${res.cls}`}> — {res.word}</span>}
+      {(it.r != null || it.pct != null) && (
+        <span className="font-mono text-[11px] text-dim tnum">
+          {" "}
+          ({[it.r != null ? signedR(it.r) : "", it.pct != null ? signedPct(it.pct) : ""].filter(Boolean).join(", ")})
+        </span>
+      )}
+      {it.failed.length > 0 && <div className="text-[10.5px] text-faint">failed: {it.failed.map(gateName).join(", ")}</div>}
+    </li>
+  );
+}
+
+/** What the stocks Claude passed on did after it passed (stats.shadow), overall and per scorecard check. */
+function TradesNotTaken({ sh }: { sh: AiReviewShadow }) {
+  return (
+    <div className="mt-3 rounded-lg border border-border bg-surface p-3">
+      <div className={LABEL}>Trades not taken</div>
+      <p className="mt-1 text-[13px] leading-snug text-text">
+        Claude passed on {sh.n} stock{sh.n === 1 ? "" : "s"}: <span className="text-gain">{sh.would_win} would have won</span>,{" "}
+        <span className="text-loss">{sh.would_lose} would have lost</span>.
+      </p>
+      {sh.by_gate.length > 0 && (
+        <>
+          <p className="mt-2 text-[11px] leading-snug text-faint">
+            Per scorecard check: the stocks it kept out, and what they did. A check helped when it kept out more losers than
+            winners. R = the planned risk per trade (−1R = the stop was hit).
+          </p>
+          <ul className="mt-1 divide-y divide-border">
+            {sh.by_gate.map((g) => {
+              const v = gateVerdict(g);
+              return (
+                <li key={g.gate} className="flex flex-wrap items-baseline justify-between gap-x-3 py-1 text-[12px]">
+                  <span className="min-w-0 text-dim">{gateName(g.gate)}</span>
+                  <span className="font-mono text-[11px] text-dim tnum">
+                    kept out {g.n}: {g.would_win} winner{g.would_win === 1 ? "" : "s"}, {g.would_lose} loser{g.would_lose === 1 ? "" : "s"}
+                    {g.avg_r != null && `, avg ${signedR(g.avg_r)}`}{" "}
+                    <span className={`font-sans font-semibold ${VERDICT_CLS[v]}`}>{v}</span>
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+        </>
+      )}
+      {sh.items.length > 0 && (
+        <details className="mt-2">
+          <summary className="cursor-pointer select-none text-[11px] text-faint hover:text-dim">
+            The {sh.items.length} stock{sh.items.length === 1 ? "" : "s"}
+          </summary>
+          <ul className="mt-1 space-y-1">
+            {sh.items.map((it, i) => (
+              <ShadowRow key={`${it.symbol}${i}`} it={it} />
+            ))}
+          </ul>
+        </details>
+      )}
+    </div>
   );
 }
 

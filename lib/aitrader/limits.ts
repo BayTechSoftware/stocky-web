@@ -131,7 +131,25 @@ export const SCORECARD_PART_LABEL: Record<string, string> = {
   float: "Float turnover",
   fundamentals: "Fundamentals",
   valuation: "Valuation vs sector",
+  sentiment: "Social sentiment",
 };
+
+/**
+ * Extra checks before an entry (borrowed from TradingAgents): a bear case argued by a separate cheap
+ * Claude call, Claude's own past trades in the stock, and optional StockTwits sentiment. Kept out of
+ * SCORECARD_WEIGHTS so the default weights still sum to 100 and existing scores don't move: sentiment
+ * only scores when it is on (weights are normalised over the components with data).
+ * Mirrors docs/SETTINGS_CONTRACT.md "Checks".
+ */
+export const CHECK_LIMITS: LimitDef[] = [
+  { key: "bear_mode", group: "Checks", label: "Bear check before each entry", kind: "select", options: ["off", "warn", "block"], def: "warn", hint: "a separate cheap Claude call argues against each trade first; warn: Claude must answer it; block: the trade is stopped when the case against wins" },
+  { key: "bear_block_conf", group: "Checks", label: "Block when the case against is at least", unit: "%", kind: "number", min: 0, max: 100, int: true, def: 70, hint: "confidence; only in block mode" },
+  { key: "bear_model", group: "Checks", label: "Bear check model", kind: "select", options: ["haiku", "sonnet", "opus"], def: "haiku", hint: "counts toward the weekly cap" },
+  { key: "memory_trades", group: "Checks", label: "Past trades shown per stock", unit: "", kind: "number", min: 0, max: 20, int: true, def: 5, hint: "Claude sees its own last trades in a stock before trading it again; 0 = off" },
+  { key: "sentiment", group: "Checks", label: "Social sentiment (StockTwits)", kind: "select", options: ["off", "stocktwits"], def: "off", hint: "adds bullish/bearish chatter to the score" },
+  // Same shape as the generated w_* weights (Scorecard weights), shown next to the switch it belongs to.
+  { key: "w_sentiment", group: "Checks", label: "Sentiment weight", unit: "", kind: "number", min: 0, max: 100, def: 10, hint: "only when social sentiment is on" },
+];
 
 export const SCORECARD_LIMITS: LimitDef[] = [
   { key: "scorecard", group: "Scorecard", label: "Scorecard before every entry", kind: "bool", def: true, hint: "off = Claude can still rate stocks; nothing is enforced" },
@@ -166,6 +184,7 @@ export const SCORECARD_LIMITS: LimitDef[] = [
       def: w,
     })
   ),
+  ...CHECK_LIMITS,
 ];
 
 /**
@@ -187,6 +206,7 @@ export const EXIT_LIMITS: LimitDef[] = [
   { key: "market_turn_mode", group: "Exits", label: "When the market turns", kind: "select", options: ["off", "wake", "exit"], def: "wake", hint: "SPY (or the stock's sector ETF) crosses VWAP against the trade, or SPY moves the % below against it" },
   { key: "market_turn_pct", group: "Exits", label: "Market turn: SPY move against", unit: "%", kind: "number", min: 0.05, max: 20, def: 0.5, hint: "since the entry" },
   { key: "review", group: "Exits", label: "Daily review after the close", kind: "bool", def: true, hint: "one cheap Claude call per box per trading day; writes lessons Claude reads the next morning. Counts toward the weekly cap" },
+  { key: "shadow_review", group: "Exits", label: "Score the trades Claude didn't take", kind: "bool", def: true, hint: "after the close: what the skipped and blocked stocks did, per scorecard check" },
   { key: "review_model", group: "Exits", label: "Review model", kind: "select", options: ["haiku", "sonnet", "opus"], def: "haiku", hint: "haiku once usage passes the slow-down %" },
   { key: "use_lessons", group: "Exits", label: "Claude reads lessons & suggestions", kind: "bool", def: true, hint: "the review's notes below; remove any you disagree with" },
   { key: "lessons_count", group: "Exits", label: "How many it reads", unit: "", kind: "number", min: 0, max: 20, int: true, def: 8, hint: "the newest of each kind (lessons, suggestions)" },

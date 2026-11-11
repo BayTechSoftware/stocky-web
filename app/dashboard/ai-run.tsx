@@ -2,7 +2,7 @@
 
 import type { Decision, DecisionScorecard, PipelineStep, RunSummary, TraceItem } from "@/lib/aitrader/engine";
 import { SCORECARD_GATE_LABEL, SCORECARD_PART_LABEL } from "@/lib/aitrader/limits";
-import { gateCounts, gateTone, scoreBand, scoreOf, scorecardOf, type GateTone } from "@/lib/aitrader/scorecard";
+import { bearOf, gateCounts, gateTone, scoreBand, scoreOf, scorecardOf, type GateTone } from "@/lib/aitrader/scorecard";
 import { price as fprice, shares } from "@/lib/portfolio";
 
 export const LABEL = "text-[10px] font-semibold uppercase tracking-wider text-faint";
@@ -76,6 +76,60 @@ export function ScoreChip({ score }: { score: number | null }) {
   );
 }
 
+type Bear = NonNullable<ReturnType<typeof bearOf>>;
+
+const BEAR_CLS: Record<Bear["verdict"], string> = {
+  against: "bg-loss/10 text-loss ring-loss/25",
+  mixed: "bg-watch/10 text-watch ring-watch/25",
+  weak: "bg-gain/10 text-gain/80 ring-gain/20",
+  unavailable: "bg-surface2 text-faint ring-border",
+};
+
+const BEAR_TITLE: Record<Bear["verdict"], string> = {
+  against: "Bear check: a separate Claude call made a strong case against this trade",
+  mixed: "Bear check: the case against this trade is so-so",
+  weak: "Bear check: the case against this trade is weak",
+  unavailable: "Bear check: it couldn't run this time",
+};
+
+/** The bear check's verdict as a small chip: "Bear: against 80%". */
+export function BearChip({ bear }: { bear: Bear }) {
+  const conf = bear.verdict !== "unavailable" && bear.confidence != null ? ` ${bear.confidence}%` : "";
+  return (
+    <span
+      title={BEAR_TITLE[bear.verdict]}
+      className={`h-fit shrink-0 rounded px-1.5 py-0.5 font-mono text-[10px] font-bold tnum ring-1 ring-inset ${BEAR_CLS[bear.verdict]}`}
+    >
+      Bear: {bear.verdict}
+      {conf}
+    </span>
+  );
+}
+
+/** The bear check's argument, for a decision's expanded detail. */
+function BearCase({ bear }: { bear: Bear }) {
+  if (!bear.case) return null;
+  return (
+    <p className="text-[11px] leading-snug text-dim">
+      <span className="font-semibold text-text">Case against</span>{" "}
+      <span className="text-faint">(a separate Claude call argued against the trade)</span>: {bear.case}
+    </p>
+  );
+}
+
+/** A decision's bear case on its own, when it has no scorecard to expand. */
+function BearDetail({ bear }: { bear: Bear }) {
+  if (!bear.case) return null;
+  return (
+    <details className="mt-1">
+      <summary className="cursor-pointer list-none text-[11px] text-dim hover:text-text">the case against ›</summary>
+      <div className="mt-1 rounded-md bg-surface2/60 p-2">
+        <BearCase bear={bear} />
+      </div>
+    </details>
+  );
+}
+
 const GATE_ICON: Record<GateTone, { icon: string; cls: string; word: string }> = {
   pass: { icon: "✓", cls: "text-gain", word: "pass" },
   warn: { icon: "!", cls: "text-watch", word: "warn" },
@@ -85,7 +139,7 @@ const GATE_ICON: Record<GateTone, { icon: string; cls: string; word: string }> =
 };
 
 /** A decision's scorecard: gates with pass / warn / fail icons and their numbers, then the component scores. */
-export function ScorecardView({ card }: { card: DecisionScorecard }) {
+export function ScorecardView({ card, bear }: { card: DecisionScorecard; bear?: Bear | null }) {
   const gates = card.gates ?? [];
   const parts = (card.parts ?? []).filter((p) => (p.w ?? 0) > 0);
   return (
@@ -112,6 +166,7 @@ export function ScorecardView({ card }: { card: DecisionScorecard }) {
           </p>
         ) : null}
         {card.why && <p className="text-[11px] text-text">Claude: {card.why}</p>}
+        {bear && <BearCase bear={bear} />}
         {gates.length > 0 ? (
           <ul className="space-y-0.5">
             {gates.map((g) => {
@@ -241,6 +296,7 @@ export function ClaudePlan({
                 const deal = dealLine(d);
                 const card = scorecardOf(d);
                 const score = scoreOf(d);
+                const bear = bearOf(d);
                 return (
                   <li key={i} className="text-[13px] leading-snug">
                     {score != null && !card && (
@@ -248,11 +304,16 @@ export function ClaudePlan({
                         <ScoreChip score={score} />
                       </span>
                     )}
+                    {bear && (
+                      <span className="mr-1.5 align-middle">
+                        <BearChip bear={bear} />
+                      </span>
+                    )}
                     <span className="font-display font-semibold text-text">{d.symbol || "All"}</span>
                     {d.reason && <span className="text-dim"> — {d.reason}</span>}
                     {d.trigger && <div className="text-xs text-accent">Would buy if: {d.trigger}</div>}
                     {deal && <div className="font-mono text-xs text-faint tnum">{deal}</div>}
-                    {card && <ScorecardView card={card} />}
+                    {card ? <ScorecardView card={card} bear={bear} /> : bear && <BearDetail bear={bear} />}
                   </li>
                 );
               })}
@@ -269,27 +330,32 @@ export function Decisions({ decisions, limit }: { decisions: Decision[]; limit?:
   if (!shown.length) return null;
   return (
     <ul className="space-y-1">
-      {shown.map((d, i) => (
-        <li key={i} className="flex gap-2 text-xs">
-          <ActionPill a={d.action} />
-          {scoreOf(d) != null && <ScoreChip score={scoreOf(d)} />}
-          <span className="min-w-0">
-            <span className="font-semibold text-text">{d.symbol}</span>
-            {pos(d.qty) && pos(d.price) && (
-              <span className="font-mono text-dim tnum"> {shares(d.qty!)} @ ${fprice(d.price!)}</span>
-            )}
-            {pos(d.stop) && (
-              <span className="font-mono text-faint tnum">
-                {" "}
-                (stop {fprice(d.stop!)}
-                {pos(d.target) ? ` / target ${fprice(d.target!)}` : ""})
-              </span>
-            )}
-            <span className="text-dim"> — {d.reason}</span>
-            {scorecardOf(d) && <ScorecardView card={scorecardOf(d)!} />}
-          </span>
-        </li>
-      ))}
+      {shown.map((d, i) => {
+        const card = scorecardOf(d);
+        const bear = bearOf(d);
+        return (
+          <li key={i} className="flex gap-2 text-xs">
+            <ActionPill a={d.action} />
+            {scoreOf(d) != null && <ScoreChip score={scoreOf(d)} />}
+            {bear && <BearChip bear={bear} />}
+            <span className="min-w-0">
+              <span className="font-semibold text-text">{d.symbol}</span>
+              {pos(d.qty) && pos(d.price) && (
+                <span className="font-mono text-dim tnum"> {shares(d.qty!)} @ ${fprice(d.price!)}</span>
+              )}
+              {pos(d.stop) && (
+                <span className="font-mono text-faint tnum">
+                  {" "}
+                  (stop {fprice(d.stop!)}
+                  {pos(d.target) ? ` / target ${fprice(d.target!)}` : ""})
+                </span>
+              )}
+              <span className="text-dim"> — {d.reason}</span>
+              {card ? <ScorecardView card={card} bear={bear} /> : bear && <BearDetail bear={bear} />}
+            </span>
+          </li>
+        );
+      })}
       {limit && decisions.length > limit && (
         <li className="text-[11px] text-faint">+{decisions.length - limit} more in the full log</li>
       )}

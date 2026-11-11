@@ -3,7 +3,7 @@
  * Decisions from before the scorecard have neither `score` nor `scorecard`; a decision Claude wrote by
  * hand may carry only lists (failed / warned / support) and no gates. Everything here tolerates both.
  */
-import type { Decision, DecisionScorecard, ScorecardGateRow } from "./engine";
+import type { Decision, DecisionBear, DecisionScorecard, ScorecardGateRow } from "./engine";
 
 export type GateTone = "pass" | "warn" | "block" | "fail-off" | "na";
 
@@ -69,4 +69,24 @@ export function gateCounts(c: DecisionScorecard): string {
     return bits.join(" · ");
   }
   return [`${n.pass} pass`, n.warn ? `${n.warn} warn` : "", n.block ? `${n.block} block` : ""].filter(Boolean).join(" · ");
+}
+
+const BEAR_VERDICTS = ["against", "mixed", "weak", "unavailable"] as const;
+
+/**
+ * The decision's bear check, cleaned up, or null when it has none (older decisions, or junk).
+ * An unknown verdict is dropped; confidence is clamped to 0–100 (null when missing); the case is trimmed.
+ */
+export function bearOf(d: { bear?: unknown }): Required<DecisionBear> | null {
+  const b = d.bear;
+  if (!b || typeof b !== "object" || Array.isArray(b)) return null;
+  const r = b as Record<string, unknown>;
+  const v = typeof r.verdict === "string" ? r.verdict.trim().toLowerCase() : "";
+  if (!(BEAR_VERDICTS as readonly string[]).includes(v)) return null;
+  const c = r.confidence;
+  return {
+    verdict: v as DecisionBear["verdict"],
+    confidence: isNum(c) ? Math.max(0, Math.min(100, Math.round(c))) : null,
+    case: typeof r.case === "string" ? r.case.trim() : "",
+  };
 }
