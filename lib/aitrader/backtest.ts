@@ -22,7 +22,7 @@
  */
 import type { Bar } from "../alpaca";
 import { assess } from "../signals";
-import { anchorToFill, isStaleEntry, reservedCash, type Rules } from "./plan";
+import { anchorToFill, isStaleEntry, nyIso, reservedCash, type Rules, type Session } from "./plan";
 import { atr, type Candidate } from "./setups";
 import {
   HISTORY_DAYS,
@@ -221,6 +221,8 @@ export function runBacktest(input: BacktestInput): BacktestResult {
   for (const s of series.values()) for (const d of s.dates) if (d >= input.start && d <= input.end) cal.add(d);
   const days = Array.from(cal).sort();
   if (!days.length) throw new Error("no daily bars in the backtest window");
+  // Entry age counts trading sessions, like the engine (the window's own trading days).
+  const sessions: Session[] = days.map((d) => ({ date: d, open: nyIso(d, "09:30"), close: nyIso(d, "16:00") }));
 
   const startCash = R.budget;
   let cash = startCash;
@@ -321,7 +323,7 @@ export function runBacktest(input: BacktestInput): BacktestResult {
 
     /* ---- 2. the run after D's close ---- */
     // a) cancel entries older than the book allows
-    const live = working.filter((w) => !isStaleEntry(w.createdAt, now, R));
+    const live = working.filter((w) => !isStaleEntry(w.createdAt, now, R, sessions));
     expiredEntries += working.length - live.length;
     working = live;
 

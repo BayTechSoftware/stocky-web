@@ -18,8 +18,7 @@ export interface Rules {
   maxStopPct: number;
   rewardRisk: number; // 0 = stop only (no take-profit)
   entrySlipPct: number;
-  entryValidDays: number;
-  staleEntryHours: number; // entryValidDays × 24 − 4 (so a 1-day entry is gone by the next evening run)
+  entryValidDays: number; // trading sessions an unfilled entry is kept (see isStaleEntry)
   minPrice: number;
   minScore: number;
   maxSignalAgeDays: number; // 0 = off
@@ -55,7 +54,6 @@ export function rulesFor(settings: Record<string, unknown> | null | undefined, b
     rewardRisk: num("reward_risk"),
     entrySlipPct: pct("entry_slip_pct"),
     entryValidDays: validDays,
-    staleEntryHours: validDays * 24 - 4,
     minPrice: num("min_price"),
     minScore: num("min_score"),
     maxSignalAgeDays: num("max_signal_age_days"),
@@ -156,7 +154,53 @@ export function reservedCash(entries: WorkingEntry[]): number {
   return entries.reduce((a, e) => a + Math.max(0, e.qty - (e.filled_qty || 0)) * (e.limit_price ?? 0), 0);
 }
 
-/** True when a working entry is older than the book allows. */
-export function isStaleEntry(createdAt: string, now: Date, R: Rules): boolean {
-  return (now.getTime() - new Date(createdAt).getTime()) / 3_600_000 > R.staleEntryHours;
+/** A trading session: its NY date and its open / close as ISO instants. */
+export interface Session {
+  date: string;
+  open: string;
+  close: string;
+}
+
+/** ISO instant of a New York wall-clock time (HH:MM) on a NY date (DST-safe). */
+export function nyIso(date: string, hhmm: string): string {
+  const noonUtc = new Date(`${date}T12:00:00Z`);
+  const off =
+    new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", timeZoneName: "longOffset" })
+      .formatToParts(noonUtc)
+      .find((p) => p.type === "timeZoneName")
+      ?.value.replace("GMT", "") || "-05:00";
+  return new Date(`${date}T${hhmm}:00${off}`).toISOString();
+}
+
+const NY_DAY = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" });
+
+/** Weekday sessions (09:30–16:00 NY) from `from` to `to` (NY dates, inclusive) — the fallback without Alpaca's calendar. */
+export function weekdaySessions(from: string, to: string): Session[] {
+  const out: Session[] = [];
+  for (let t = Date.parse(`${from}T12:00:00Z`); t <= Date.parse(`${to}T12:00:00Z`); t += 86_400_000) {
+    const d = new Date(t);
+    const wd = d.getUTCDay();
+    if (wd === 0 || wd === 6) continue;
+    const date = d.toISOString().slice(0, 10);
+    out.push({ date, open: nyIso(date, "09:30"), close: nyIso(date, "16:00") });
+  }
+  return out;
+}
+
+/** Full sessions an order has been working: sessions that opened after it was created and have closed by `now`. */
+export function sessionsWorked(createdAt: string, now: Date, sessions?: Session[]): number {
+  const c = Date.parse(createdAt);
+  const n = now.getTime();
+  const cal = sessions ?? weekdaySessions(NY_DAY.format(new Date(c)), NY_DAY.format(now));
+  return cal.filter((s) => Date.parse(s.open) > c && Date.parse(s.close) <= n).length;
+}
+
+/**
+ * True when a working entry has had its entry_valid_days trading sessions to fill. Counted in sessions,
+ * not hours: an entry placed Friday evening gets Monday's whole session; one placed during a session
+ * gets the rest of that session plus N full ones. Pass Alpaca's calendar (holidays, half days) when
+ * available; without it weekdays count.
+ */
+export function isStaleEntry(createdAt: string, now: Date, R: Rules, sessions?: Session[]): boolean {
+  return sessionsWorked(createdAt, now, sessions) >= R.entryValidDays;
 }

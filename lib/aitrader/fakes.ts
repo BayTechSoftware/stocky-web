@@ -250,6 +250,14 @@ export function alpacaModule(f: () => FakeAlpaca) {
     getPaperAccount: async () => ({ account_number: "PA123", status: "ACTIVE", cash: "0", equity: "0", buying_power: "0" }),
     getClock: async () => f().clock,
     isTradingDay: async () => true,
+    getCalendar: async (_c: unknown, from: string, to: string) => {
+      const out: { date: string; open: string; close: string }[] = [];
+      for (let t = Date.parse(`${from}T12:00:00Z`); t <= Date.parse(`${to}T12:00:00Z`); t += 86_400_000) {
+        const d = new Date(t);
+        if (d.getUTCDay() % 6 !== 0) out.push({ date: d.toISOString().slice(0, 10), open: "09:30", close: "16:00" });
+      }
+      return out;
+    },
     listOrders: async () => f().orders,
     listFills: async () => f().fills,
     getPositions: async () => f().positions,

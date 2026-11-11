@@ -158,7 +158,7 @@ describe("rulesFor", () => {
     expect(RULES).toMatchObject({
       budget: 5000, riskPct: 0.01, maxPositionPct: 0.2, cashBufferPct: 0, maxPositions: 5, maxNewPerRun: 3,
       dailyLossHaltPct: 0.03, rewardRisk: 2, atrMult: 2, minStopPct: 0.03, maxStopPct: 0.12, entrySlipPct: 0.01,
-      entryValidDays: 1, staleEntryHours: 20, minPrice: 10, minScore: 60, enterOnWatch: false, exitOnOverbought: true,
+      entryValidDays: 1, minPrice: 10, minScore: 60, enterOnWatch: false, exitOnOverbought: true,
       maxHoldDays: 21, maxRsi: 75, uptrendOnly: true, universeAdd: [], universeRemove: [],
     });
     expect(rulesFor({}, "mylist").maxHoldDays).toBe(0);
@@ -178,7 +178,7 @@ describe("rulesFor", () => {
     expect(free).toMatchObject({
       budget: 20000, riskPct: 0.02, maxPositionPct: 0.5, cashBufferPct: 0, maxPositions: 8, maxNewPerRun: 4,
       dailyLossHaltPct: 0, rewardRisk: 0, atrMult: 3, minStopPct: 0.02, maxStopPct: 0.2, entrySlipPct: 0.005,
-      entryValidDays: 3, staleEntryHours: 68, minPrice: 5, maxHoldDays: 0, maxRsi: 90, uptrendOnly: false,
+      entryValidDays: 3, minPrice: 5, maxHoldDays: 0, maxRsi: 90, uptrendOnly: false,
       universeAdd: ["PLTR", "SMCI"], universeRemove: ["TSLA"], minScore: 60,
     });
     const my = rulesFor({ min_score: 70, enter_on_watch: true, exit_on_overbought: false, max_hold_days: 10, max_rsi: 10 }, "mylist");
@@ -237,11 +237,27 @@ describe("orders", () => {
     ).toBe(500 + 600);
   });
 
-  it("an entry goes stale after entry_valid_days × 24 − 4 hours", () => {
-    const now = new Date("2026-11-10T22:30:00Z");
-    expect(isStaleEntry("2026-11-09T22:30:00Z", now, RULES)).toBe(true); // 24h > 20h
-    expect(isStaleEntry("2026-11-10T14:00:00Z", now, RULES)).toBe(false);
-    expect(isStaleEntry("2026-11-09T22:30:00Z", now, rulesFor({ entry_valid_days: 2 }))).toBe(false); // 44h window
+  it("an entry goes stale after entry_valid_days trading sessions", () => {
+    const now = new Date("2026-11-10T22:30:00Z"); // Tue evening
+    expect(isStaleEntry("2026-11-09T22:30:00Z", now, RULES)).toBe(true); // Mon-evening entry had Tue's session
+    expect(isStaleEntry("2026-11-10T14:00:00Z", now, RULES)).toBe(true); // 09:00 NY, before Tue's open: had all of Tue
+    expect(isStaleEntry("2026-11-10T16:00:00Z", now, RULES)).toBe(false); // placed mid-session: Tue doesn't count
+    expect(isStaleEntry("2026-11-09T22:30:00Z", now, rulesFor({ entry_valid_days: 2 }))).toBe(false);
+  });
+
+  it("a Friday-evening entry survives Monday's midday run and goes at Monday's evening run", () => {
+    const fri = "2026-11-06T22:30:00Z";
+    expect(isStaleEntry(fri, new Date("2026-11-09T15:00:00Z"), RULES)).toBe(false); // Mon midday
+    expect(isStaleEntry(fri, new Date("2026-11-09T22:30:00Z"), RULES)).toBe(true); // Mon evening
+    expect(isStaleEntry(fri, new Date("2026-11-09T22:30:00Z"), rulesFor({ entry_valid_days: 2 }))).toBe(false);
+  });
+
+  it("holidays from the calendar don't count", () => {
+    const fri = "2026-11-06T22:30:00Z";
+    const tue = { date: "2026-11-10", open: "2026-11-10T14:30:00.000Z", close: "2026-11-10T21:00:00.000Z" };
+    // Monday is a holiday in this calendar: only Tuesday counts.
+    expect(isStaleEntry(fri, new Date("2026-11-09T22:30:00Z"), RULES, [tue])).toBe(false);
+    expect(isStaleEntry(fri, new Date("2026-11-10T22:30:00Z"), RULES, [tue])).toBe(true);
   });
 });
 

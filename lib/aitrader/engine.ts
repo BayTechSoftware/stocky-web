@@ -22,7 +22,7 @@ import * as A from "@/lib/alpaca";
 import { bookState, ledgerFills, shortOrderIds } from "./ledger";
 import { loadFills, loadOrders, must } from "./rows";
 import { ownerOf } from "./live";
-import { anchorToFill, entryOrderBody, isStaleEntry, reservedCash, rulesFor, type Rules } from "./plan";
+import { anchorToFill, entryOrderBody, isStaleEntry, nyIso, reservedCash, rulesFor, weekdaySessions, type Rules, type Session } from "./plan";
 import { freeUniverse } from "./universe";
 import { atr, type Candidate } from "./setups";
 import {
@@ -449,6 +449,20 @@ async function runForUser(admin: Admin, mode: RunMode, books: BookRow[], creds: 
     if (r) prevEquity.set(id, r.equity as number);
   }
 
+  // Trading sessions since the oldest working entry (entry age counts sessions, not hours).
+  const oldestWorking = ours.filter((o) => o.kind === "entry" && OPEN.has(o.status)).map((o) => o.created_at).sort()[0];
+  let sessions: Session[] | undefined;
+  let calendarNote: string | undefined;
+  if (oldestWorking) {
+    const from = etDate(new Date(oldestWorking));
+    try {
+      sessions = (await A.getCalendar(creds, from, today)).map((d) => ({ date: d.date, open: nyIso(d.date, d.open), close: nyIso(d.date, d.close) }));
+    } catch (e) {
+      sessions = weekdaySessions(from, today);
+      calendarNote = `market calendar unavailable (${e instanceof Error ? e.message : String(e)}) — entry age counted in weekdays.`;
+    }
+  }
+
   /* ---- 3. run each book ---- */
   const out: RunSummary[] = [];
   for (const b of books) {
@@ -468,7 +482,7 @@ async function runForUser(admin: Admin, mode: RunMode, books: BookRow[], creds: 
     const fills = ledgerFills(allFills.filter((f) => f.book_id === b.id), shortEntries);
     const st = bookState(b.start_cash, fills);
     const decisions: Decision[] = [];
-    const notes: string[] = recoveryNotes.has(b.id) ? [recoveryNotes.get(b.id)!] : [];
+    const notes: string[] = [recoveryNotes.get(b.id), calendarNote].filter((n): n is string => !!n);
     const orders = ours.filter((o) => o.book_id === b.id);
     const R = rulesOf.get(b.id)!;
     const dry = mode === "dry";
@@ -500,8 +514,9 @@ async function runForUser(admin: Admin, mode: RunMode, books: BookRow[], creds: 
       let working = orders.filter((o) => o.kind === "entry" && OPEN.has(o.status));
       const cancelledPartials: OrderRow[] = [];
       for (const p of working) {
-        if (!p.alpaca_order_id || !isStaleEntry(p.created_at, now, R)) continue;
+        if (!p.alpaca_order_id || !isStaleEntry(p.created_at, now, R, sessions)) continue;
         const ageH = Math.round((now.getTime() - new Date(p.created_at).getTime()) / 3_600_000);
+        const sess = `${R.entryValidDays} trading session${R.entryValidDays === 1 ? "" : "s"}`;
         const partial = p.filled_qty > 0;
         if (!dry) {
           const ok = await attempt(p.symbol, () => A.cancelOrder(creds, p.alpaca_order_id!).then(() => true));
@@ -515,8 +530,8 @@ async function runForUser(admin: Admin, mode: RunMode, books: BookRow[], creds: 
           symbol: p.symbol,
           action: "cancel",
           reason: partial
-            ? `cancelled the unfilled ${p.qty - p.filled_qty} of ${p.qty} after ${ageH}h — keeping the ${p.filled_qty} filled`
-            : `entry didn't fill in ${ageH}h`,
+            ? `cancelled the unfilled ${p.qty - p.filled_qty} of ${p.qty} after ${sess} (${ageH}h) — keeping the ${p.filled_qty} filled`
+            : `entry didn't fill in ${sess} (${ageH}h)`,
         });
       }
       working = working.filter((p) => p.status !== "canceled");

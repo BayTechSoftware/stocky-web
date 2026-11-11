@@ -87,6 +87,11 @@ export async function isTradingDay(c: Creds, date: string): Promise<boolean> {
   return cal.some((d) => d.date === date);
 }
 
+/** Trading sessions from `start` to `end` (YYYY-MM-DD, NY), with their open / close times (HH:MM NY). */
+export async function getCalendar(c: Creds, start: string, end: string): Promise<{ date: string; open: string; close: string }[]> {
+  return call<{ date: string; open: string; close: string }[]>(c, TRADE, `/v2/calendar?start=${start}&end=${end}`);
+}
+
 export interface Order {
   id: string;
   client_order_id: string;
