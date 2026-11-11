@@ -7,6 +7,7 @@ import { loadCreds, runAiTrader as runAiTraderEngine } from "@/lib/aitrader/engi
 import { RUNNER_LIMITS, defsForBook, effective, validateLimits } from "@/lib/aitrader/limits";
 import type { AiRun } from "@/lib/aitrader/view";
 import { planLiveSync, type KnownOrder } from "@/lib/aitrader/live";
+import { loadOrders, must } from "@/lib/aitrader/rows";
 import { AlpacaError, getClock, getDailyBars, getPaperAccount, listFills, listOrders, type Bar, type Creds } from "@/lib/alpaca";
 import { rulesFor } from "@/lib/aitrader/plan";
 import { freeUniverse } from "@/lib/aitrader/universe";
@@ -459,25 +460,23 @@ export async function syncLive(): Promise<{ ok: true } | { error: string }> {
     const { data: books } = await admin.from("ai_books").select("id, key, created_at").eq("user_id", user.id);
     if (!books?.length) return { ok: true };
     const ids = books.map((b) => b.id as string);
-    const { data: known, error } = await admin
-      .from("ai_orders")
-      .select("id, book_id, alpaca_order_id, leg_ids, status, filled_qty, filled_avg")
-      .in("book_id", ids);
-    if (error) return { error: error.message };
+    const known = await loadOrders<KnownOrder>(admin, ids, "id, book_id, alpaca_order_id, leg_ids, status, filled_qty, filled_avg");
     const since = books.map((b) => b.created_at as string).sort()[0];
     const [remote, fills] = await Promise.all([listOrders(creds, since), listFills(creds, since)]);
     const plan = planLiveSync(
-      (known ?? []) as KnownOrder[],
+      known,
       remote,
       fills,
       new Map(books.map((b) => [b.key as string, b.id as string]))
     );
-    await Promise.all(plan.updates.map((u) => admin.from("ai_orders").update(u.patch).eq("id", u.id)));
+    for (const r of await Promise.all(plan.updates.map((u) => admin.from("ai_orders").update(u.patch).eq("id", u.id)))) {
+      must("ai_orders update", r);
+    }
     if (plan.inserts.length) {
-      await admin.from("ai_orders").upsert(plan.inserts, { onConflict: "alpaca_order_id", ignoreDuplicates: true });
+      must("ai_orders insert", await admin.from("ai_orders").upsert(plan.inserts, { onConflict: "alpaca_order_id", ignoreDuplicates: true }));
     }
     if (plan.fillRows.length) {
-      await admin.from("ai_fills").upsert(plan.fillRows, { onConflict: "activity_id", ignoreDuplicates: true });
+      must("ai_fills upsert", await admin.from("ai_fills").upsert(plan.fillRows, { onConflict: "activity_id", ignoreDuplicates: true }));
     }
     return { ok: true };
   } catch (e) {

@@ -12,6 +12,7 @@ import { notesFrom, reviewsFrom, type AiNote, type AiReview } from "./reviews";
 import { tradesFromFills } from "./live";
 import { loadCreds, type ReplayInfo, type RunSummary, type RunUsage } from "./engine";
 import { groupReplays, type AiReplayDay } from "./replays";
+import { loadFills, loadOrders } from "./rows";
 
 export type { AiReplayDay, AiReplayStep } from "./replays";
 export type { ClosedTrade, ExitReason } from "./ledger";
@@ -19,6 +20,8 @@ export type { AiNote, AiReview } from "./reviews";
 
 /** Closed round trips kept per book in the view. */
 const CLOSED_CAP = 100;
+/** Equity snapshots per book in the chart (newest; ~2 years of trading days). */
+export const SERIES_CAP = 500;
 
 export interface AiPositionView {
   symbol: string;
@@ -113,6 +116,8 @@ export interface AiView {
   connection: { hint: string | null; connected_at: string } | null;
   runner: Record<string, number | string>;
   error: string | null;
+  /** Set when the ledger (orders / fills) or the equity series couldn't be read: the boxes' numbers aren't trustworthy. */
+  ledgerError: string | null;
 }
 
 type Admin = ReturnType<typeof createAdminClient>;
@@ -149,28 +154,34 @@ export async function loadAiView(
   const ids = books.map((b) => b.id as string);
   const claudeIds = books.filter((b) => String(b.key).startsWith("claude-")).map((b) => b.id as string);
 
-  const [fillsR, ordersR, roleOrdersR, metaR, eqR, todayR, weekR, replayR, reviewsR, notesR, connR, runnerR, ...latestR] = await Promise.all([
-    supabase.from("ai_fills").select("book_id, order_id, symbol, side, qty, price, transacted_at").in("book_id", ids),
-    supabase
-      .from("ai_orders")
-      .select("book_id, symbol, side, kind, qty, limit_price, stop_price, target_price, status, reason, filled_qty, created_at")
-      .in("book_id", ids)
-      .order("created_at", { ascending: false })
-      .limit(200),
-    // Separate from the capped list above: an old short entry must still open its position in the ledger.
-    supabase
-      .from("ai_orders")
-      .select("alpaca_order_id, side, kind")
-      .in("book_id", ids)
-      .or("and(kind.eq.entry,side.eq.sell),and(kind.eq.exit,side.eq.buy)"),
-    // Order ids, legs and stops for every order, to explain how each closed trip started and ended.
-    supabase
-      .from("ai_orders")
-      .select("book_id, alpaca_order_id, leg_ids, kind, client_order_id, reason, stop_price, target_price")
-      .in("book_id", ids)
-      .order("created_at", { ascending: false })
-      .limit(1000),
-    supabase.from("ai_equity").select("book_id, as_of, equity").in("book_id", ids).order("as_of", { ascending: true }),
+  // The whole ledger, paged (lib/aitrader/rows.ts): fills and every order (open orders, each position's
+  // entry and short roles all come from this one list, so nothing is cut off at the newest 200).
+  type OrderRowV = {
+    book_id: string; symbol: string; side: string; kind: string; qty: number; limit_price: number | null;
+    stop_price: number | null; target_price: number | null; status: string; reason: string | null; filled_qty: number;
+    created_at: string; alpaca_order_id: string | null; leg_ids: string[] | null; client_order_id: string | null;
+  };
+  type FillRowV = { book_id: string; order_id: string; symbol: string; side: string; qty: number; price: number; transacted_at: string };
+  const ledgerP = Promise.all([
+    loadFills<FillRowV>(supabase, ids, "book_id, order_id, symbol, side, qty, price, transacted_at"),
+    loadOrders<OrderRowV>(
+      supabase,
+      ids,
+      "book_id, symbol, side, kind, qty, limit_price, stop_price, target_price, status, reason, filled_qty, created_at, alpaca_order_id, leg_ids, client_order_id"
+    ),
+  ]).then(
+    ([fills, orders]) => ({ fills, orders, error: null as string | null }),
+    (e: unknown) => ({ fills: [] as FillRowV[], orders: [] as OrderRowV[], error: e instanceof Error ? e.message : String(e) })
+  );
+  const eqP = Promise.all(
+    ids.map((id) =>
+      supabase.from("ai_equity").select("book_id, as_of, equity").eq("book_id", id).order("as_of", { ascending: false }).limit(SERIES_CAP)
+    )
+  );
+
+  const [ledger, eqRs, todayR, weekR, replayR, reviewsR, notesR, connR, runnerR, ...latestR] = await Promise.all([
+    ledgerP,
+    eqP,
     // Today's Claude runs, light fields only (the trace can be tens of KB per run).
     claudeIds.length
       ? supabase
@@ -260,15 +271,15 @@ export async function loadAiView(
     }
   }
 
-  // Without these, short entries read as stray sells and the box's equity is wrong: say so.
-  if (roleOrdersR.error) {
-    error = [error, `Short positions may be missing: ${roleOrdersR.error.message}`].filter(Boolean).join(" · ");
-  }
-  const { shortEntries, covers } = shortOrderIds(roleOrdersR.data ?? []);
-
-  const fills = fillsR.data ?? [];
-  const orders = ordersR.data ?? [];
-  const eq = eqR.data ?? [];
+  // A failed ledger or equity read must not render as a flat, empty box: say so (the UI shows ledgerError).
+  const eqErr = eqRs.find((r) => r.error)?.error?.message ?? null;
+  const ledgerError = ledger.error ?? (eqErr ? `ai_equity: ${eqErr}` : null);
+  if (ledgerError) error = [error, `Ledger unavailable — numbers below may be wrong: ${ledgerError}`].filter(Boolean).join(" · ");
+  const { fills, orders } = ledger;
+  const { shortEntries, covers } = shortOrderIds(
+    orders.filter((o) => (o.kind === "entry" && o.side === "sell") || (o.kind === "exit" && o.side === "buy"))
+  );
+  const eq = eqRs.flatMap((r) => ((r.data ?? []) as { book_id: string; as_of: string; equity: number }[]).slice().reverse());
   const latest = new Map<string, AiRun>();
   for (const r of latestR) {
     const row = r.data as (AiRun & { book_id: string }) | null;
@@ -288,7 +299,7 @@ export async function loadAiView(
     const st = bookState(
       b.start_cash as number,
       ledgerFills(fills.filter((f) => f.book_id === b.id), shortEntries),
-      ((metaR.data ?? []) as (OrderMeta & { book_id: string })[]).filter((o) => o.book_id === b.id)
+      orders.filter((o) => o.book_id === b.id) as OrderMeta[]
     );
     // A short's stop and target legs fill as buys under the entry's row, so the ledger names those.
     const coverIds = new Set([...covers, ...st.coverOrderIds]);
@@ -431,5 +442,6 @@ export async function loadAiView(
     connection: conn ? { hint: conn.account_hint, connected_at: conn.connected_at } : null,
     runner: ((runnerR.data as { settings?: Record<string, number | string> } | null)?.settings) ?? {},
     error,
+    ledgerError,
   };
 }

@@ -20,6 +20,7 @@
 import type { createAdminClient } from "@/lib/supabase/admin";
 import * as A from "@/lib/alpaca";
 import { bookState, ledgerFills, shortOrderIds } from "./ledger";
+import { loadFills, loadOrders, must } from "./rows";
 import { anchorToFill, entryOrderBody, isStaleEntry, reservedCash, rulesFor, type Rules } from "./plan";
 import { freeUniverse } from "./universe";
 import { atr, type Candidate } from "./setups";
@@ -71,6 +72,7 @@ interface OrderRow {
   status: string;
   filled_qty: number;
   filled_avg: number | null;
+  client_order_id?: string | null;
   created_at: string;
 }
 
@@ -275,11 +277,12 @@ async function runForUser(admin: Admin, mode: RunMode, books: BookRow[], creds: 
   const since = books.map((b) => b.created_at).sort()[0];
 
   /* ---- 1. sync Alpaca order status + fills into the ledger ---- */
-  const { data: ordersData } = await admin
-    .from("ai_orders")
-    .select("id, book_id, symbol, side, kind, qty, limit_price, stop_price, target_price, leg_ids, alpaca_order_id, status, filled_qty, filled_avg, created_at")
-    .in("book_id", bookIds);
-  const ours = (ordersData ?? []) as OrderRow[];
+  // Paged and fail-loud: a run never trades from half a ledger (a read error fails the run before anything is placed).
+  const ours = await loadOrders<OrderRow>(
+    admin,
+    bookIds,
+    "id, book_id, symbol, side, kind, qty, limit_price, stop_price, target_price, leg_ids, alpaca_order_id, client_order_id, status, filled_qty, filled_avg, created_at"
+  );
   const bookOfOrder = new Map<string, string>();
   for (const o of ours) {
     if (o.alpaca_order_id) bookOfOrder.set(o.alpaca_order_id, o.book_id);
@@ -307,7 +310,7 @@ async function runForUser(admin: Admin, mode: RunMode, books: BookRow[], creds: 
       for (const l of legIds) bookOfOrder.set(l, o.book_id);
     }
     if (Object.keys(patch).length) {
-      await admin.from("ai_orders").update(patch).eq("id", o.id);
+      must(`ai_orders update ${o.id}`, await admin.from("ai_orders").update(patch).eq("id", o.id));
       Object.assign(o, patch);
     }
   }
@@ -326,13 +329,13 @@ async function runForUser(admin: Admin, mode: RunMode, books: BookRow[], creds: 
       transacted_at: a.transaction_time,
     }));
   if (fillRows.length) {
-    await admin.from("ai_fills").upsert(fillRows, { onConflict: "activity_id", ignoreDuplicates: true });
+    must("ai_fills upsert", await admin.from("ai_fills").upsert(fillRows, { onConflict: "activity_id", ignoreDuplicates: true }));
   }
-  const { data: fillsData } = await admin
-    .from("ai_fills")
-    .select("book_id, order_id, symbol, side, qty, price, transacted_at")
-    .in("book_id", bookIds);
-  const allFills = fillsData ?? [];
+  const allFills = await loadFills<{ book_id: string; order_id: string; symbol: string; side: string; qty: number; price: number; transacted_at: string }>(
+    admin,
+    bookIds,
+    "book_id, order_id, symbol, side, qty, price, transacted_at"
+  );
   const { shortEntries } = shortOrderIds(ours);
 
   // Claude books short on this same account; Rules books must never buy into that.
@@ -345,7 +348,8 @@ async function runForUser(admin: Admin, mode: RunMode, books: BookRow[], creds: 
 
   /* ---- 2. market data for every symbol we might touch ---- */
   const userIds = Array.from(new Set(books.map((b) => b.user_id)));
-  const { data: wl } = await admin.from("watchlist").select("user_id, symbol").in("user_id", userIds);
+  const { data: wl, error: wlErr } = await admin.from("watchlist").select("user_id, symbol").in("user_id", userIds);
+  if (wlErr) throw new Error(`watchlist: ${wlErr.message}`);
   const listOf = new Map<string, string[]>();
   for (const r of wl ?? []) {
     const u = r.user_id as string;
@@ -382,19 +386,26 @@ async function runForUser(admin: Admin, mode: RunMode, books: BookRow[], creds: 
   };
 
   const listSymbols = Array.from(new Set(Array.from(listOf.values()).flat()));
-  const { data: sigData } = listSymbols.length
+  const { data: sigData, error: sigErr } = listSymbols.length
     ? await admin.from("symbol_signals").select("symbol, assessment, tag, score, updated_at").in("symbol", listSymbols)
-    : { data: [] };
+    : { data: [], error: null };
+  if (sigErr) throw new Error(`symbol_signals: ${sigErr.message}`);
   const sigBy = new Map((sigData ?? []).map((s) => [s.symbol as string, s]));
 
-  const { data: eqRows } = await admin
-    .from("ai_equity")
-    .select("book_id, as_of, equity")
-    .in("book_id", bookIds)
-    .lt("as_of", today)
-    .order("as_of", { ascending: false });
+  // The previous snapshot per book (the daily-loss halt's baseline): one row each.
   const prevEquity = new Map<string, number>();
-  for (const r of eqRows ?? []) if (!prevEquity.has(r.book_id as string)) prevEquity.set(r.book_id as string, r.equity as number);
+  for (const id of bookIds) {
+    const { data: r, error: eqErr } = await admin
+      .from("ai_equity")
+      .select("book_id, as_of, equity")
+      .eq("book_id", id)
+      .lt("as_of", today)
+      .order("as_of", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (eqErr) throw new Error(`ai_equity: ${eqErr.message}`);
+    if (r) prevEquity.set(id, r.equity as number);
+  }
 
   /* ---- 3. run each book ---- */
   const out: RunSummary[] = [];
@@ -402,11 +413,11 @@ async function runForUser(admin: Admin, mode: RunMode, books: BookRow[], creds: 
     try {
       const s = await runBook(b);
       out.push(s);
-      await admin.from("ai_runs").insert({ book_id: b.id, mode, summary: s, error: s.error ?? null });
+      await logRun(admin, b.id, mode, s, s.error ?? null);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       out.push({ book: b.name, mode, equity: 0, cash: 0, available: 0, decisions: [], error: msg });
-      await admin.from("ai_runs").insert({ book_id: b.id, mode, summary: {}, error: msg });
+      await logRun(admin, b.id, mode, {}, msg);
     }
   }
   return out;
@@ -449,7 +460,8 @@ async function runForUser(admin: Admin, mode: RunMode, books: BookRow[], creds: 
         if (!dry) {
           const ok = await attempt(p.symbol, () => A.cancelOrder(creds, p.alpaca_order_id!).then(() => true));
           if (!ok) continue;
-          await admin.from("ai_orders").update({ status: "canceled" }).eq("id", p.id);
+          const { error: cErr } = await admin.from("ai_orders").update({ status: "canceled" }).eq("id", p.id);
+          if (cErr) notes.push(`${p.symbol}: cancelled at Alpaca but not recorded (${cErr.message}) — the next sync fixes it.`);
           p.status = "canceled";
           if (partial) cancelledPartials.push(p);
         }
@@ -569,10 +581,11 @@ async function runForUser(admin: Admin, mode: RunMode, books: BookRow[], creds: 
     }
 
     if (!dry) {
-      await admin.from("ai_equity").upsert(
+      const { error: eqErr } = await admin.from("ai_equity").upsert(
         { book_id: b.id, as_of: today, equity: round2(equity), cash: round2(st.cash) },
         { onConflict: "book_id,as_of" }
       );
+      if (eqErr) notes.push(`equity snapshot not saved (${eqErr.message}).`);
     }
     return {
       book: b.name,
@@ -622,7 +635,8 @@ async function runForUser(admin: Admin, mode: RunMode, books: BookRow[], creds: 
           bookOfOrder.set(nu.id, o.book_id);
           remoteById.set(nu.id, nu);
           const patch = { leg_ids: legIds, ...(isStop ? { stop_price: next } : { target_price: next }) };
-          await admin.from("ai_orders").update(patch).eq("id", o.id);
+          const { error: uErr } = await admin.from("ai_orders").update(patch).eq("id", o.id);
+          if (uErr) notes.push(`${o.symbol}: ${what} moved at Alpaca but not recorded (${uErr.message}).`);
           Object.assign(o, patch);
         }
         decisions.push({ symbol: o.symbol, action: "hold", reason: tag });
@@ -757,6 +771,12 @@ async function runForUser(admin: Admin, mode: RunMode, books: BookRow[], creds: 
 }
 
 const LIVE = new Set([...OPEN, "pending_replace"]);
+
+/** Record a run; a failed insert is logged (the run itself already happened). */
+async function logRun(admin: Admin, bookId: string, mode: RunMode, summary: unknown, error: string | null) {
+  const { error: e } = await admin.from("ai_runs").insert({ book_id: bookId, mode, summary, error });
+  if (e) console.error(`ai_runs insert (${bookId}): ${e.message}`);
+}
 
 /** Time of the latest fill of `symbol` in the ledger. */
 function lastFillAt(fills: { symbol: string; transacted_at: string }[], symbol: string): string {
