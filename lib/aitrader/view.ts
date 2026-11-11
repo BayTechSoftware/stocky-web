@@ -83,7 +83,15 @@ export interface AiBookView {
   notes: AiNote[];
   /** This box's saved limits (validated on save; defaults apply where missing). */
   settings: Record<string, number | string>;
+  /** This week's (NY, since Monday) Claude usage on the site: runs + replays + the after-close reviews (ai_reviews.cost_usd). */
   weekCostUsd: number;
+  /** Of weekCostUsd: the reviews' share. */
+  weekReviewCostUsd: number;
+  /**
+   * The Mac's own weekly total from the latest Claude run (usage.week_usage_usd): the whole account's usage
+   * including the bear checks, which aren't synced per call. null before a run reports it.
+   */
+  weekUsageMacUsd: number | null;
   series: { as_of: string; equity: number }[];
 }
 
@@ -296,6 +304,14 @@ export async function loadAiView(
   for (const r of (weekR.data ?? []) as { book_id: string; mode: string; cost: number | null }[]) {
     weekCost.set(r.book_id, (weekCost.get(r.book_id) ?? 0) + (Number(r.cost) || 0));
   }
+  // The after-close reviews are separate Claude calls: their cost is on ai_reviews, by NY day.
+  const monday = nyMidnight(nyWeekday()).slice(0, 10);
+  const reviewCost = new Map<string, number>();
+  if (!reviewsR.error) {
+    for (const r of (reviewsR.data ?? []) as { book_id: string; day: string; cost_usd: number | null }[]) {
+      if (String(r.day) >= monday) reviewCost.set(r.book_id, (reviewCost.get(r.book_id) ?? 0) + (Number(r.cost_usd) || 0));
+    }
+  }
 
   const views: AiBookView[] = books.map((b) => {
     // P&L baseline: start_cash + size changes (Rules and Claude boxes alike).
@@ -429,7 +445,12 @@ export async function loadAiView(
       reviews: reviewsR.error ? [] : reviewsFrom(reviewsR.data, b.id as string),
       notes: notesR.error ? [] : notesFrom(notesR.data, b.id as string),
       settings: (b.settings as Record<string, number | string> | null) ?? {},
-      weekCostUsd: weekCost.get(b.id as string) ?? 0,
+      weekCostUsd: (weekCost.get(b.id as string) ?? 0) + (reviewCost.get(b.id as string) ?? 0),
+      weekReviewCostUsd: reviewCost.get(b.id as string) ?? 0,
+      weekUsageMacUsd: (() => {
+        const v = run?.summary?.usage?.week_usage_usd;
+        return typeof v === "number" && Number.isFinite(v) ? v : null;
+      })(),
       series: eq.filter((e) => e.book_id === b.id).map((e) => ({ as_of: e.as_of as string, equity: e.equity as number })),
     };
   });

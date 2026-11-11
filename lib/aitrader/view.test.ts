@@ -43,3 +43,21 @@ describe("loadAiView (fixes #2, #11)", () => {
     expect(v.error).toMatch(/Ledger unavailable/);
   });
 });
+
+describe("loadAiView weekly usage (fix #14)", () => {
+  it("adds this week's review costs and shows the Mac's own weekly total", async () => {
+    const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date());
+    const db = fakeDb({
+      ai_books: [{ id: "cb", key: "claude-free", name: "Claude Free", start_cash: 5000, settings: { budget: 8000 } }],
+      ai_orders: [], ai_fills: [], ai_equity: [],
+      ai_runs: [{ id: "r1", book_id: "cb", ran_at: new Date().toISOString(), mode: "claude", error: null, cost: 1.5, summary: { usage: { cost_usd: 1.5, week_usage_usd: 9.25 } } }],
+      ai_reviews: [{ book_id: "cb", day: today, cost_usd: 0.25 }, { book_id: "cb", day: "2020-01-01", cost_usd: 99 }],
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const b = (await loadAiView(db as any))!.books[0];
+    expect(b.weekReviewCostUsd).toBe(0.25);
+    expect(b.weekCostUsd).toBe(1.75);
+    expect(b.weekUsageMacUsd).toBe(9.25);
+    expect(b.startCash).toBe(8000); // a Claude box's P&L baseline follows its budget (fix #9)
+  });
+});

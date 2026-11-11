@@ -90,14 +90,23 @@ describe("backtest fills", () => {
     expect(r.endEquity).toBe(5000 + 9 * (90 - 100));
   });
 
-  it("legs don't trigger on the fill bar itself", () => {
+  it("legs work from the fill: a low under the stop on the fill bar stops it the same day (stop assumed first)", () => {
     const r = run([
       [100, 101, 99, 100],
-      [100, 101, 95, 100], // fills at 100, low under the stop on the same bar
+      [100, 101, 95, 100], // fills at 100, low under the 96 stop on the same bar
       [100, 101, 99.5, 100],
     ]);
-    expect(r.trades).toBe(0);
-    expect(r.tradesList[0].open).toBe(true);
+    expect(r.trades).toBe(1);
+    expect(r.tradesList[0]).toMatchObject({ entry: 100, exit: 96, why: "stop — the day it filled" });
+  });
+
+  it("a target reached on the fill bar takes profit the same day", () => {
+    const r = run([
+      [100, 101, 99, 100],
+      [100, 112, 99.5, 110], // fills at 100, high over the 111 target
+      [110, 111, 109, 110],
+    ]);
+    expect(r.tradesList[0]).toMatchObject({ entry: 100, exit: 111, why: "target — the day it filled" });
   });
 
   it("open above the limit but low ≤ limit fills at the limit", () => {

@@ -337,7 +337,11 @@ export function runBacktest(input: BacktestInput): BacktestResult {
           stop: w.stop, target: w.target, atr14: w.atr14, setup: w.setup,
         };
         positions.set(w.symbol, p);
-        filledToday.push(p);
+        // The legs work from the fill: the same bar can stop it (assumed first) or hit the target.
+        if (fill <= p.stop) close(p, fill, `filled at/below the ${p.stop.toFixed(2)} stop — stopped the same day`);
+        else if (bar!.l <= p.stop) close(p, p.stop, "stop — the day it filled");
+        else if (p.target != null && bar!.h >= p.target) close(p, p.target, "target — the day it filled");
+        else filledToday.push(p);
       }
       working = still;
     }

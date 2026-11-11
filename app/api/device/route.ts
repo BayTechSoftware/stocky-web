@@ -143,6 +143,16 @@ export async function PUT(req: NextRequest) {
     lots: Lot[];
   };
   const bySymbol = new Map<string, Row>();
+  // A negative (or non-numeric) lot quantity or price is a bad payload: refuse the whole write.
+  for (const h of rawHoldings as Record<string, unknown>[]) {
+    for (const l of Array.isArray(h?.lots) ? (h.lots as Record<string, unknown>[]) : []) {
+      const qty = Number(l?.qty ?? 0);
+      const price = Number(l?.price ?? 0);
+      if (!Number.isFinite(qty) || qty < 0 || !Number.isFinite(price) || price < 0) {
+        return NextResponse.json({ error: `invalid lot for ${String(h?.symbol ?? "?")}: quantity and price must be ≥ 0` }, { status: 400 });
+      }
+    }
+  }
   for (const h of rawHoldings as Record<string, unknown>[]) {
     const symbol = String(h?.symbol ?? "").trim().toUpperCase();
     if (!SYMBOL_RE.test(symbol)) continue;
@@ -188,13 +198,15 @@ export async function PUT(req: NextRequest) {
 
   // Then drop any of the user's symbols no longer present (completes the replace).
   const keep = new Set(rows.map((r) => r.symbol));
-  const { data: existing } = await admin
+  const { data: existing, error: exErr } = await admin
     .from("watchlist")
     .select("symbol")
     .eq("user_id", tok.user_id);
+  if (exErr) return NextResponse.json({ error: exErr.message }, { status: 500 });
   const toDelete = (existing ?? []).map((r) => r.symbol as string).filter((s) => !keep.has(s));
   if (toDelete.length) {
-    await admin.from("watchlist").delete().eq("user_id", tok.user_id).in("symbol", toDelete);
+    const { error: delErr } = await admin.from("watchlist").delete().eq("user_id", tok.user_id).in("symbol", toDelete);
+    if (delErr) return NextResponse.json({ error: `saved, but removing ${toDelete.length} symbol(s) failed: ${delErr.message}` }, { status: 500 });
   }
 
   await admin
