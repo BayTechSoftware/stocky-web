@@ -826,15 +826,15 @@ async function runForUser(admin: Admin, mode: RunMode, books: BookRow[], creds: 
       ? `no working stop and the price ${px!.toFixed(2)} is at/below the ${stop.toFixed(2)} stop — selling`
       : `no working stop on record — placed a GTC stop at ${stop.toFixed(2)}`;
     if (mode !== "dry") {
-      const clientId = clientOrderId(b.key, "s", symbol, today);
       const body = crossed
-        ? { symbol, qty: String(qty), side: "sell", type: "market", time_in_force: "day", client_order_id: clientId }
-        : { symbol, qty: String(qty), side: "sell", type: "stop", stop_price: stop.toFixed(2), time_in_force: "gtc", client_order_id: clientId };
-      const o = await A.submitOrder(creds, body).catch((e: unknown) => {
+        ? { symbol, qty: String(qty), side: "sell", type: "market", time_in_force: "day" }
+        : { symbol, qty: String(qty), side: "sell", type: "stop", stop_price: stop.toFixed(2), time_in_force: "gtc" };
+      const placed = await submitProtective(creds, body, clientOrderId(b.key, "s", symbol, today)).catch((e: unknown) => {
         decisions.push({ symbol, action: "skip", reason: `rejected by Alpaca: ${e instanceof Error ? e.message : String(e)}` });
         return undefined;
       });
-      if (!o) return;
+      if (!placed) return;
+      const { order: o, clientId } = placed;
       const row = {
         book_id: b.id, symbol, side: "sell" as const, kind: "exit" as const, qty, reason: why,
         stop_price: crossed ? null : stop, alpaca_order_id: o.id, client_order_id: clientId, status: o.status,
@@ -877,12 +877,14 @@ async function runForUser(admin: Admin, mode: RunMode, books: BookRow[], creds: 
       if (states.every((s) => !LIVE.has(s) && s !== "pending_cancel")) break;
       await sleep(500);
     }
-    const clientId = clientOrderId(b.key, "x", symbol, today);
     let o: A.Order;
+    let clientId: string;
     try {
-      o = await A.submitOrder(creds, {
-        symbol, qty: String(qty), side: "sell", type: "market", time_in_force: "day", client_order_id: clientId,
-      });
+      ({ order: o, clientId } = await submitProtective(
+        creds,
+        { symbol, qty: String(qty), side: "sell", type: "market", time_in_force: "day" },
+        clientOrderId(b.key, "x", symbol, today)
+      ));
     } catch (e) {
       // The sell failed after the stop legs were cancelled: re-read them so the stop check that follows
       // (runBook step e) sees fresh states and places a stop if none is left.
@@ -936,6 +938,23 @@ export function clientOrderId(book: string, kind: "e" | "s" | "x", symbol: strin
 
 /** Alpaca's answer to a reused client_order_id. */
 export const isDuplicateClientId = (msg: string) => /client_order_id/i.test(msg) && /unique|exists|duplicate/i.test(msg);
+
+/**
+ * Submit a protective order (stop / exit) under its deterministic id; if that id was already used today
+ * (an earlier stop of the same day was cancelled or filled), retry as <id>-2 … <id>-5. Only callers that
+ * already checked no such order is working use this — a protective stop must never be lost to a used id.
+ */
+export async function submitProtective(creds: A.Creds, body: Record<string, unknown>, baseId: string): Promise<{ order: A.Order; clientId: string }> {
+  for (let n = 1; ; n++) {
+    const clientId = n === 1 ? baseId : `${baseId}-${n}`;
+    try {
+      return { order: await A.submitOrder(creds, { ...body, client_order_id: clientId }), clientId };
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (n >= 5 || !isDuplicateClientId(msg)) throw e;
+    }
+  }
+}
 
 /** Insert an ai_orders row, retried (3 tries); returns the last error message, or null once recorded. */
 export async function recordOrder(admin: Admin, row: Record<string, unknown>, tries = 3): Promise<string | null> {

@@ -221,3 +221,24 @@ describe("engine harness: gap down (fix #13)", () => {
     expect(r.decisions.some((d) => d.action === "cancel" && /gapped down/.test(d.reason))).toBe(true);
   });
 });
+
+describe("engine harness: a second protective stop the same day (fix #6 follow-up)", () => {
+  it("re-places a needed stop under <id>-2 when today's stop id is used", async () => {
+    const db = world();
+    alp.orders.push(fakeOrder({
+      id: "p1", symbol: "AAPL", side: "buy", qty: "10", filled_qty: "10", filled_avg_price: "100", status: "filled",
+      client_order_id: "stk-free-e-AAPL-2026-11-09", order_class: "oto", created_at: "2026-11-09T22:30:00Z",
+      legs: [fakeOrder({ id: "ls", symbol: "AAPL", side: "sell", type: "stop", stop_price: "94", status: "canceled" })],
+    }));
+    db.tables.ai_orders.push({
+      id: "o1", book_id: "book-free", symbol: "AAPL", side: "buy", kind: "entry", qty: 10, stop_price: 94, leg_ids: ["ls"],
+      alpaca_order_id: "p1", client_order_id: "stk-free-e-AAPL-2026-11-09", status: "filled", filled_qty: 10, filled_avg: 100, created_at: "2026-11-09T22:30:00Z",
+    });
+    alp.fills.push({ id: "f1", order_id: "p1", symbol: "AAPL", side: "buy", qty: "10", price: "100", transaction_time: "2026-11-10T14:31:00Z" });
+    alp.bars.AAPL = dailyBars(80, 100);
+    alp.usedClientIds.add("stk-free-s-AAPL-2026-11-11"); // an earlier stop today, since cancelled
+    const [r] = await run(db);
+    expect(alp.submitted.map((b) => b.client_order_id)).toEqual(["stk-free-s-AAPL-2026-11-11-2"]);
+    expect(r.decisions.some((d) => /placed a GTC stop/.test(d.reason))).toBe(true);
+  });
+});
