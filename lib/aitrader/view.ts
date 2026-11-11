@@ -13,6 +13,7 @@ import { tradesFromFills } from "./live";
 import { loadCreds, type ReplayInfo, type RunSummary, type RunUsage } from "./engine";
 import { groupReplays, type AiReplayDay } from "./replays";
 import { loadFills, loadOrders } from "./rows";
+import { loadAdjustments, sizeOf, type CashAdjustment } from "./cash";
 
 export type { AiReplayDay, AiReplayStep } from "./replays";
 export type { ClosedTrade, ExitReason } from "./ledger";
@@ -163,6 +164,7 @@ export async function loadAiView(
   };
   type FillRowV = { book_id: string; order_id: string; symbol: string; side: string; qty: number; price: number; transacted_at: string };
   const ledgerP = Promise.all([
+    loadAdjustments(supabase, ids),
     loadFills<FillRowV>(supabase, ids, "book_id, order_id, symbol, side, qty, price, transacted_at"),
     loadOrders<OrderRowV>(
       supabase,
@@ -170,8 +172,8 @@ export async function loadAiView(
       "book_id, symbol, side, kind, qty, limit_price, stop_price, target_price, status, reason, filled_qty, created_at, alpaca_order_id, leg_ids, client_order_id"
     ),
   ]).then(
-    ([fills, orders]) => ({ fills, orders, error: null as string | null }),
-    (e: unknown) => ({ fills: [] as FillRowV[], orders: [] as OrderRowV[], error: e instanceof Error ? e.message : String(e) })
+    ([adj, fills, orders]) => ({ adj: adj.list, fills, orders, error: null as string | null }),
+    (e: unknown) => ({ adj: [] as CashAdjustment[], fills: [] as FillRowV[], orders: [] as OrderRowV[], error: e instanceof Error ? e.message : String(e) })
   );
   const eqP = Promise.all(
     ids.map((id) =>
@@ -275,7 +277,7 @@ export async function loadAiView(
   const eqErr = eqRs.find((r) => r.error)?.error?.message ?? null;
   const ledgerError = ledger.error ?? (eqErr ? `ai_equity: ${eqErr}` : null);
   if (ledgerError) error = [error, `Ledger unavailable — numbers below may be wrong: ${ledgerError}`].filter(Boolean).join(" · ");
-  const { fills, orders } = ledger;
+  const { fills, orders, adj } = ledger;
   const { shortEntries, covers } = shortOrderIds(
     orders.filter((o) => (o.kind === "entry" && o.side === "sell") || (o.kind === "exit" && o.side === "buy"))
   );
@@ -296,8 +298,10 @@ export async function loadAiView(
   }
 
   const views: AiBookView[] = books.map((b) => {
+    // P&L baseline: start_cash + size changes (Rules and Claude boxes alike).
+    const start = sizeOf({ id: b.id as string, key: b.key as string, start_cash: b.start_cash as number, settings: b.settings }, adj);
     const st = bookState(
-      b.start_cash as number,
+      start,
       ledgerFills(fills.filter((f) => f.book_id === b.id), shortEntries),
       orders.filter((o) => o.book_id === b.id) as OrderMeta[]
     );
@@ -339,7 +343,6 @@ export async function loadAiView(
     });
     const value = positions.reduce((a, p) => a + p.value, 0);
     const equity = st.cash + value;
-    const start = b.start_cash as number;
 
     const pending: AiOrderView[] = bookOrders
       .filter((o) => OPEN.has(o.status as string) && (o.kind === "exit" || (o.filled_qty as number) < (o.qty as number)))

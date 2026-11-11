@@ -8,6 +8,7 @@ import { RUNNER_LIMITS, defsForBook, effective, validateLimits } from "@/lib/ait
 import type { AiRun } from "@/lib/aitrader/view";
 import { planLiveSync, type KnownOrder } from "@/lib/aitrader/live";
 import { loadOrders, must } from "@/lib/aitrader/rows";
+import { baselineOf, loadAdjustments, sizeOf } from "@/lib/aitrader/cash";
 import { AlpacaError, getClock, getDailyBars, getPaperAccount, listFills, listOrders, type Bar, type Creds } from "@/lib/alpaca";
 import { rulesFor } from "@/lib/aitrader/plan";
 import { freeUniverse } from "@/lib/aitrader/universe";
@@ -381,28 +382,58 @@ export async function disconnectFinnhub(): Promise<Result> {
 
 /**
  * Save one box's limits (validated + clamped against the shared definitions).
- * A Rules box's `budget` is its size, so it also sets ai_books.start_cash (the
- * ledger's starting cash); resetting to defaults resets it to the default budget.
+ * A change of the box's size (`budget`) is recorded as a dated cash adjustment
+ * (supabase/ai_cash_adjustments.sql) — ai_books.start_cash is never rewritten,
+ * so history and the daily-loss halt's baseline stay right. Rules and Claude boxes.
  */
 export async function saveBookLimits(bookKey: string, values: Record<string, unknown>): Promise<Result> {
   const { supabase, user } = await uid();
   if (!user) return { error: "not signed in" };
   // RLS: only finds the user's own book.
-  const { data: book } = await supabase.from("ai_books").select("id, key").eq("key", bookKey).maybeSingle();
+  const { data: book, error: bookErr } = await supabase.from("ai_books").select("id, key, start_cash, settings").eq("key", bookKey).maybeSingle();
+  if (bookErr) return { error: bookErr.message };
   if (!book) return { error: "no such book" };
   const isClaude = String(book.key).startsWith("claude-");
   const defs = defsForBook(String(book.key));
   const v = validateLimits(defs, values);
   if (!v.ok) return { error: v.errors.join(" · ") };
-  const patch: { settings: typeof v.settings; start_cash?: number } = { settings: v.settings };
-  if (!isClaude) {
-    const budget = Number(effective(defs, v.settings).budget);
-    if (Number.isFinite(budget) && budget > 0) patch.start_cash = budget;
+  const admin = createAdminClient();
+  const sized = await recordSizeChange(admin, book, Number(effective(defs, v.settings).budget));
+  if ("error" in sized) return sized;
+  const { error } = await admin.from("ai_books").update({ settings: v.settings }).eq("id", book.id);
+  if (error) {
+    if (sized.adjustmentId) await admin.from("ai_cash_adjustments").delete().eq("id", sized.adjustmentId);
+    return { error: error.message };
   }
-  const { error } = await createAdminClient().from("ai_books").update(patch).eq("id", book.id);
-  if (error) return { error: error.message };
   revalidatePath("/dashboard");
   return { message: isClaude ? "Saved — the Mac applies them before Claude's next run." : "Saved — used from the next run." };
+}
+
+/** Record a new box size as a dated cash adjustment (new − current baseline); nothing when the size is unchanged. */
+async function recordSizeChange(
+  admin: ReturnType<typeof createAdminClient>,
+  book: { id: string; key: string; start_cash: number; settings: Record<string, unknown> | null },
+  budget: number
+): Promise<{ adjustmentId: string | null } | { error: string }> {
+  if (!Number.isFinite(budget) || budget <= 0) return { adjustmentId: null };
+  let adj;
+  try {
+    adj = await loadAdjustments(admin, [book.id]);
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
+  if (Math.abs(budget - sizeOf(book, adj.list)) < 0.005) return { adjustmentId: null };
+  if (adj.missing) {
+    return { error: "Book size can't change yet: apply supabase/ai_cash_adjustments.sql first (other settings save fine with the size unchanged)." };
+  }
+  const amount = Math.round((budget - baselineOf(book.start_cash, adj.list, book.id)) * 100) / 100;
+  const { data, error } = await admin
+    .from("ai_cash_adjustments")
+    .insert({ book_id: book.id, amount, reason: `book size to ${budget}` })
+    .select("id")
+    .maybeSingle();
+  if (error) return { error: `Couldn't record the size change: ${error.message}` };
+  return { adjustmentId: (data?.id as string | undefined) ?? null };
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

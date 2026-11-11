@@ -22,6 +22,7 @@ import * as A from "@/lib/alpaca";
 import { bookState, ledgerFills, shortOrderIds } from "./ledger";
 import { loadFills, loadOrders, must } from "./rows";
 import { ownerOf } from "./live";
+import { adjustedSince, baselineOf, loadAdjustments } from "./cash";
 import { anchorToFill, entryOrderBody, isStaleEntry, nyIso, reservedCash, rulesFor, weekdaySessions, type Rules, type Session } from "./plan";
 import { freeUniverse } from "./universe";
 import { atr, type Candidate } from "./setups";
@@ -438,6 +439,9 @@ async function runForUser(admin: Admin, mode: RunMode, books: BookRow[], creds: 
 
   // The previous snapshot per book (the daily-loss halt's baseline): one row each.
   const prevEquity = new Map<string, number>();
+  const prevAsOf = new Map<string, string>();
+  // Box size changes (supabase/ai_cash_adjustments.sql): part of the baseline, never a loss.
+  const { list: adjustments } = await loadAdjustments(admin, bookIds);
   for (const id of bookIds) {
     const { data: r, error: eqErr } = await admin
       .from("ai_equity")
@@ -448,7 +452,10 @@ async function runForUser(admin: Admin, mode: RunMode, books: BookRow[], creds: 
       .limit(1)
       .maybeSingle();
     if (eqErr) throw new Error(`ai_equity: ${eqErr.message}`);
-    if (r) prevEquity.set(id, r.equity as number);
+    if (r) {
+      prevEquity.set(id, r.equity as number);
+      prevAsOf.set(id, r.as_of as string);
+    }
   }
 
   // Trading sessions since the oldest working entry (entry age counts sessions, not hours).
@@ -482,7 +489,7 @@ async function runForUser(admin: Admin, mode: RunMode, books: BookRow[], creds: 
 
   async function runBook(b: BookRow): Promise<RunSummary> {
     const fills = ledgerFills(allFills.filter((f) => f.book_id === b.id), shortEntries);
-    const st = bookState(b.start_cash, fills);
+    const st = bookState(baselineOf(b.start_cash, adjustments, b.id), fills);
     const decisions: Decision[] = [];
     const notes: string[] = [recoveryNotes.get(b.id), calendarNote].filter((n): n is string => !!n);
     const orders = ours.filter((o) => o.book_id === b.id);
@@ -545,8 +552,9 @@ async function runForUser(admin: Admin, mode: RunMode, books: BookRow[], creds: 
         await reanchor(o, R);
       }
 
-      /* c) daily-loss halt: vs the previous snapshot's equity */
-      halted = haltReason(equity, prevEquity.get(b.id), R);
+      /* c) daily-loss halt: vs the previous snapshot's equity, plus any size change since (not a loss) */
+      const prev = prevEquity.get(b.id);
+      halted = haltReason(equity, prev == null ? prev : prev + adjustedSince(adjustments, b.id, prevAsOf.get(b.id)!), R);
 
       /* d) rule-based exits (the attached stop / target handle themselves) */
       const exited = new Set<string>();

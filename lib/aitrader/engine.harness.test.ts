@@ -177,3 +177,31 @@ describe("engine harness: midday entries + re-entry cooldown (fix #8)", () => {
     expect(r.decisions.some((d) => /waiting 1 day before re-entering/.test(d.reason))).toBe(true);
   });
 });
+
+describe("engine harness: box size changes (fix #9)", () => {
+  it("a size cut since the last snapshot doesn't trip the daily-loss halt, and cash follows the new size", async () => {
+    const db = entryWorld();
+    db.tables.ai_books[0].start_cash = 10000;
+    db.tables.ai_equity.push({ book_id: "book-my", as_of: "2026-11-10", equity: 10000, cash: 10000 });
+    db.tables.ai_cash_adjustments = [{ book_id: "book-my", at: "2026-11-11T16:00:00Z", amount: -5000 }];
+    const [r] = await run(db);
+    expect(r.halted).toBeUndefined();
+    expect(r.cash).toBe(5000);
+    expect(alp.submitted.length).toBe(1);
+  });
+
+  it("without the adjustment a real 50% drop still halts", async () => {
+    const db = entryWorld();
+    db.tables.ai_equity.push({ book_id: "book-my", as_of: "2026-11-10", equity: 10000, cash: 10000 });
+    const [r] = await run(db);
+    expect(r.halted).toMatch(/daily-loss halt/);
+  });
+
+  it("works before the table exists", async () => {
+    const db = entryWorld();
+    db.fail.set("ai_cash_adjustments:select", { message: 'relation "public.ai_cash_adjustments" does not exist' });
+    const [r] = await run(db);
+    expect(r.error).toBeUndefined();
+    expect(r.cash).toBe(5000);
+  });
+});
