@@ -36,6 +36,8 @@ describe("contract tables", () => {
         "breakeven_at_r", "trail_mode", "trail_start_r", "trail_atr_mult", "trail_pct", "partial_pct", "partial_r",
         "time_stop_min", "time_stop_min_r", "time_stop_mode", "market_turn_mode", "market_turn_pct", "review", "review_model",
         "use_lessons", "lessons_count", "shadow_review",
+        "market_read", "flatten_backup", "entry_orders", "bear_fail_closed", "min_stop_atr", "max_breakout_age_min",
+        "lesson_min_trades",
       ].sort()
     );
     expect(keys(RUNNER_LIMITS)).toEqual(
