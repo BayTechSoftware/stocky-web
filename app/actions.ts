@@ -393,6 +393,32 @@ export async function saveBookLimits(bookKey: string, values: Record<string, unk
   return { message: isClaude ? "Saved — the Mac applies them before Claude's next run." : "Saved — used from the next run." };
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Remove one lesson or suggestion (ai_notes, supabase/ai_notes.sql) so Claude stops reading it.
+ * Kept as a soft delete (removed_at): the Mac rebuilds the book's lessons file from the active notes
+ * before every Claude run, and the unique key stops the same text coming back for that day.
+ */
+export async function removeNote(noteId: string): Promise<Result> {
+  const { supabase, user } = await uid();
+  if (!user) return { error: "not signed in" };
+  if (typeof noteId !== "string" || !UUID_RE.test(noteId)) return { error: "no such note" };
+  // RLS: only returns the user's own notes (owner-read policy through ai_books).
+  const { data: note, error: readErr } = await supabase.from("ai_notes").select("id, removed_at").eq("id", noteId).maybeSingle();
+  if (readErr) return { error: readErr.message };
+  if (!note) return { error: "no such note" };
+  if (note.removed_at) return { message: "Already removed." };
+  const { error } = await createAdminClient()
+    .from("ai_notes")
+    .update({ removed_at: new Date().toISOString() })
+    .eq("id", noteId)
+    .is("removed_at", null);
+  if (error) return { error: error.message };
+  revalidatePath("/dashboard");
+  return { message: "Removed — Claude stops reading it from its next run." };
+}
+
 /** Save how often Claude runs and the weekly usage cap (read by the Mac's watcher). */
 export async function saveRunnerSettings(values: Record<string, unknown>): Promise<Result> {
   const { supabase, user } = await uid();

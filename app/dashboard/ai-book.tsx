@@ -1,10 +1,11 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { loadRunDetail } from "../actions";
+import { useRouter } from "next/navigation";
+import { loadRunDetail, removeNote } from "../actions";
 import { money, moneySigned, pct, price as fprice, shares } from "@/lib/portfolio";
 import { CLAUDE_LIMITS, defsForBook, effective, rulesDefs } from "@/lib/aitrader/limits";
-import type { AiBookView, AiReplayDay, AiReview, AiRun, AiRunLite, ClosedTrade, ExitReason } from "@/lib/aitrader/view";
+import type { AiBookView, AiNote, AiReplayDay, AiReview, AiRun, AiRunLite, ClosedTrade, ExitReason } from "@/lib/aitrader/view";
 import { ClaudePlan, LABEL, RunDetail, col, when } from "./ai-run";
 import { BacktestPanel } from "./ai-backtest";
 import { LimitsEditor } from "./ai-settings";
@@ -267,56 +268,158 @@ function ReplayDay({ d }: { d: AiReplayDay }) {
   );
 }
 
-/** The Mac's after-close reviews (bin/reviewer.py → ai_reviews), newest day first. */
-function DailyReviews({ reviews }: { reviews: AiReview[] }) {
-  const [all, setAll] = useState(false);
-  if (!reviews.length) {
-    return (
-      <Block title="Daily review">
-        <Empty>No review yet. After each trading day&apos;s close the Mac writes one here.</Empty>
-      </Block>
-    );
+/** One active lesson or suggestion, with its Remove button. */
+function NoteItem({ n, over, onRemoved }: { n: AiNote; over: boolean; onRemoved: (id: string) => void }) {
+  const [busy, start] = useTransition();
+  const [err, setErr] = useState<string | null>(null);
+  const router = useRouter();
+  function remove() {
+    if (!confirm(`Remove this ${n.kind}? Claude stops reading it from its next run.`)) return;
+    setErr(null);
+    start(async () => {
+      const r = await removeNote(n.id);
+      if ("error" in r) setErr(r.error);
+      else {
+        onRemoved(n.id);
+        router.refresh();
+      }
+    });
   }
+  return (
+    <li className="flex items-start gap-3 py-2">
+      <div className="min-w-0 flex-1">
+        <p className={`text-[13px] leading-snug ${over ? "text-faint" : "text-text"}`}>{n.text}</p>
+        <div className="mt-0.5 flex flex-wrap items-center gap-x-2 font-mono text-[10.5px] text-faint tnum">
+          <span>{shortDay(n.day)}</span>
+          {n.kind === "suggestion" && (
+            <span className="rounded bg-watch/10 px-1.5 py-px font-sans text-[10px] font-semibold uppercase tracking-wider text-watch">
+              suggestion
+            </span>
+          )}
+          {over && <span className="font-sans">not read (over the limit)</span>}
+        </div>
+        {err && <p className="mt-1 text-xs text-loss">{err}</p>}
+      </div>
+      <button
+        onClick={remove}
+        disabled={busy}
+        className="shrink-0 rounded-md border border-border px-2 py-1 text-[11px] font-medium text-dim hover:border-loss/40 hover:text-loss disabled:opacity-50"
+      >
+        {busy ? "Removing…" : "Remove"}
+      </button>
+    </li>
+  );
+}
+
+/** The active notes (ai_notes) the Mac writes into the book's lessons file before Claude's next run. */
+function ReadsNext({ notes, use, count }: { notes: AiNote[]; use: boolean; count: number }) {
+  // Hide a removed note at once; the refreshed page data drops it for good.
+  const [gone, setGone] = useState<string[]>([]);
+  const active = notes.filter((n) => !gone.includes(n.id));
+  const onRemoved = (id: string) => setGone((g) => [...g, id]);
+  const lessons = active.filter((n) => n.kind === "lesson");
+  const suggestions = active.filter((n) => n.kind === "suggestion");
+  const list = (items: AiNote[]) => (
+    <ul className="divide-y divide-border">
+      {items.map((n, i) => (
+        <NoteItem key={n.id} n={n} over={use && i >= count} onRemoved={onRemoved} />
+      ))}
+    </ul>
+  );
+  return (
+    <div className="mb-3 rounded-xl border border-border bg-surface p-4">
+      <div className="mb-1 flex flex-wrap items-baseline justify-between gap-2">
+        <span className="font-display text-sm font-semibold text-text">What Claude reads next</span>
+        {use && active.length > 0 && <span className="text-[11px] text-faint">the newest {count} of each kind</span>}
+      </div>
+      {!use && <p className="mb-1 text-xs text-watch">Off in Limits &amp; settings — Claude reads none of these.</p>}
+      {!active.length ? (
+        <p className="py-2 text-sm text-dim">No lessons yet.</p>
+      ) : (
+        <>
+          {lessons.length > 0 && (
+            <div className="mt-2">
+              <div className={LABEL}>Lessons ({lessons.length})</div>
+              {list(lessons)}
+            </div>
+          )}
+          {suggestions.length > 0 && (
+            <div className="mt-3">
+              <div className={LABEL}>Suggestions for you ({suggestions.length})</div>
+              <p className="mt-0.5 text-[11px] leading-snug text-faint">
+                Setting changes the review proposes; the decision is yours. Change it in Limits &amp; settings if you agree —
+                Claude never acts against a setting.
+              </p>
+              {list(suggestions)}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+/** The Mac's after-close reviews (bin/reviewer.py → ai_reviews), newest day first, under the notes Claude reads next. */
+function DailyReviews({ reviews, notes, settings }: { reviews: AiReview[]; notes: AiNote[]; settings: AiBookView["settings"] }) {
+  const [all, setAll] = useState(false);
+  const cfg = effective(CLAUDE_LIMITS, settings);
+  const use = cfg.use_lessons !== false && cfg.use_lessons !== "false";
+  const want = Number(cfg.lessons_count);
+  const count = Number.isFinite(want) && want >= 0 ? Math.floor(want) : 8;
   const shown = all ? reviews : reviews.slice(0, 1);
   return (
-    <Block title="Daily review" hint="written after the close; its lessons are what Claude reads the next morning">
-      <ul className="space-y-2.5">
-        {shown.map((r) => {
-          const s = r.stats;
-          const reasons = Object.entries(s.exit_reasons ?? {})
-            .map(([k, n]) => `${REASON_LABEL[k as ExitReason] ?? k} ${n}`)
-            .join(" · ");
-          return (
-            <li key={r.day} className="rounded-xl border border-border bg-surface2/30 p-4">
-              <div className="mb-1.5 flex flex-wrap items-baseline justify-between gap-2">
-                <span className="font-display text-sm font-semibold text-text">{reviewDay(r.day)}</span>
-                <span className="font-mono text-[11px] text-dim tnum">
-                  {s.trades != null && `${s.trades} trade${s.trades === 1 ? "" : "s"}`}
-                  {s.wins != null && s.trades ? ` · ${s.wins} won` : ""}
-                  {s.pnl != null && <span className={col(s.pnl)}> · {moneySigned(s.pnl, 2)}</span>}
-                  {s.avg_r != null && ` · avg ${s.avg_r.toFixed(2)}R`}
-                </span>
-              </div>
-              {r.summary && <p className="text-sm leading-relaxed text-text">{r.summary}</p>}
-              {r.lessons.length > 0 && (
-                <div className="mt-2.5">
-                  <div className={`mb-1 ${LABEL}`}>Lessons for tomorrow</div>
-                  <ol className="list-decimal space-y-1 pl-5 text-[13px] leading-snug text-dim">
-                    {r.lessons.map((l, i) => (
-                      <li key={i}>{l}</li>
-                    ))}
-                  </ol>
+    <Block title="Daily review" hint="written after the close; you decide which notes Claude keeps">
+      <ReadsNext notes={notes} use={use} count={count} />
+      {!reviews.length ? (
+        <Empty>No review yet. After each trading day&apos;s close the Mac writes one here.</Empty>
+      ) : (
+        <ul className="space-y-2.5">
+          {shown.map((r) => {
+            const s = r.stats;
+            const reasons = Object.entries(s.exit_reasons ?? {})
+              .map(([k, n]) => `${REASON_LABEL[k as ExitReason] ?? k} ${n}`)
+              .join(" · ");
+            const written = r.lessons.length + r.suggestions.length;
+            return (
+              <li key={r.day} className="rounded-xl border border-border bg-surface2/30 p-4">
+                <div className="mb-1.5 flex flex-wrap items-baseline justify-between gap-2">
+                  <span className="font-display text-sm font-semibold text-text">{reviewDay(r.day)}</span>
+                  <span className="font-mono text-[11px] text-dim tnum">
+                    {s.trades != null && `${s.trades} trade${s.trades === 1 ? "" : "s"}`}
+                    {s.wins != null && s.trades ? ` · ${s.wins} won` : ""}
+                    {s.pnl != null && <span className={col(s.pnl)}> · {moneySigned(s.pnl, 2)}</span>}
+                    {s.avg_r != null && ` · avg ${s.avg_r.toFixed(2)}R`}
+                  </span>
                 </div>
-              )}
-              <div className="mt-2 font-mono text-[10.5px] text-faint tnum">
-                {reasons && `exits: ${reasons}`}
-                {s.model && `${reasons ? " · " : ""}${s.model}`}
-                {r.costUsd != null && ` · $${r.costUsd.toFixed(3)}`}
-              </div>
-            </li>
-          );
-        })}
-      </ul>
+                {r.summary && <p className="text-sm leading-relaxed text-text">{r.summary}</p>}
+                {written > 0 && (
+                  <details className="mt-2 text-[12px] text-dim">
+                    <summary className="cursor-pointer select-none text-faint hover:text-dim">
+                      As written that day ({r.lessons.length} lesson{r.lessons.length === 1 ? "" : "s"}
+                      {r.suggestions.length > 0 && `, ${r.suggestions.length} suggestion${r.suggestions.length === 1 ? "" : "s"}`})
+                    </summary>
+                    <ul className="mt-1.5 list-disc space-y-1 pl-5 leading-snug">
+                      {r.lessons.map((l, i) => (
+                        <li key={`l${i}`}>{l}</li>
+                      ))}
+                      {r.suggestions.map((l, i) => (
+                        <li key={`s${i}`}>
+                          <span className="text-watch">suggestion:</span> {l}
+                        </li>
+                      ))}
+                    </ul>
+                  </details>
+                )}
+                <div className="mt-2 font-mono text-[10.5px] text-faint tnum">
+                  {reasons && `exits: ${reasons}`}
+                  {s.model && `${reasons ? " · " : ""}${s.model}`}
+                  {r.costUsd != null && ` · $${r.costUsd.toFixed(3)}`}
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
       {reviews.length > 1 && (
         <button onClick={() => setAll(!all)} className="mt-2 text-xs font-medium text-accent hover:underline">
           {all ? "Show the latest only" : `Show the last ${reviews.length} days`}
@@ -324,6 +427,12 @@ function DailyReviews({ reviews }: { reviews: AiReview[] }) {
       )}
     </Block>
   );
+}
+
+/** "Nov 10" from "2026-11-10" (a calendar day: no time zone shift). */
+function shortDay(day: string): string {
+  const [y, m, d] = day.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
 }
 
 /** "Tue, Nov 10" from "2026-11-10" (a calendar day: no time zone shift). */
@@ -728,7 +837,7 @@ export function BookCard({ b }: { b: AiBookView }) {
                 <Empty>This box hasn&apos;t run yet.</Empty>
               )}
             </Block>
-            {isClaude && <DailyReviews reviews={b.reviews} />}
+            {isClaude && <DailyReviews reviews={b.reviews} notes={b.notes} settings={b.settings} />}
             {isClaude && <Timeline runs={b.today} latestId={run?.id ?? null} />}
             {isClaude && <Replays days={b.replays} />}
             {!isClaude && <BacktestPanel bookKey={b.key} />}

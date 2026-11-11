@@ -188,6 +188,8 @@ export const EXIT_LIMITS: LimitDef[] = [
   { key: "market_turn_pct", group: "Exits", label: "Market turn: SPY move against", unit: "%", kind: "number", min: 0.05, max: 20, def: 0.5, hint: "since the entry" },
   { key: "review", group: "Exits", label: "Daily review after the close", kind: "bool", def: true, hint: "one cheap Claude call per box per trading day; writes lessons Claude reads the next morning. Counts toward the weekly cap" },
   { key: "review_model", group: "Exits", label: "Review model", kind: "select", options: ["haiku", "sonnet", "opus"], def: "haiku", hint: "haiku once usage passes the slow-down %" },
+  { key: "use_lessons", group: "Exits", label: "Claude reads lessons & suggestions", kind: "bool", def: true, hint: "the review's notes below; remove any you disagree with" },
+  { key: "lessons_count", group: "Exits", label: "How many it reads", unit: "", kind: "number", min: 0, max: 20, int: true, def: 8, hint: "the newest of each kind (lessons, suggestions)" },
 ];
 
 export const CLAUDE_LIMITS: LimitDef[] = [

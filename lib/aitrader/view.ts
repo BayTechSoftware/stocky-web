@@ -8,14 +8,14 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { createAdminClient } from "@/lib/supabase/admin";
 import * as A from "@/lib/alpaca";
 import { bookState, fillRole, ledgerFills, shortOrderIds, type ClosedTrade, type FillRole, type OrderMeta } from "./ledger";
-import { reviewsFrom, type AiReview } from "./reviews";
+import { notesFrom, reviewsFrom, type AiNote, type AiReview } from "./reviews";
 import { tradesFromFills } from "./live";
 import { loadCreds, type ReplayInfo, type RunSummary, type RunUsage } from "./engine";
 import { groupReplays, type AiReplayDay } from "./replays";
 
 export type { AiReplayDay, AiReplayStep } from "./replays";
 export type { ClosedTrade, ExitReason } from "./ledger";
-export type { AiReview } from "./reviews";
+export type { AiNote, AiReview } from "./reviews";
 
 /** Closed round trips kept per book in the view. */
 const CLOSED_CAP = 100;
@@ -75,6 +75,8 @@ export interface AiBookView {
   replays: AiReplayDay[];
   /** After-close reviews (Claude boxes; ai_reviews), newest day first; [] until the table exists. */
   reviews: AiReview[];
+  /** Active lessons + suggestions (ai_notes, not removed) — what Claude reads next; newest first; [] until the table exists. */
+  notes: AiNote[];
   /** This box's saved limits (validated on save; defaults apply where missing). */
   settings: Record<string, number | string>;
   weekCostUsd: number;
@@ -147,7 +149,7 @@ export async function loadAiView(
   const ids = books.map((b) => b.id as string);
   const claudeIds = books.filter((b) => String(b.key).startsWith("claude-")).map((b) => b.id as string);
 
-  const [fillsR, ordersR, roleOrdersR, metaR, eqR, todayR, weekR, replayR, reviewsR, connR, runnerR, ...latestR] = await Promise.all([
+  const [fillsR, ordersR, roleOrdersR, metaR, eqR, todayR, weekR, replayR, reviewsR, notesR, connR, runnerR, ...latestR] = await Promise.all([
     supabase.from("ai_fills").select("book_id, order_id, symbol, side, qty, price, transacted_at").in("book_id", ids),
     supabase
       .from("ai_orders")
@@ -204,10 +206,20 @@ export async function loadAiView(
     claudeIds.length
       ? supabase
           .from("ai_reviews")
-          .select("book_id, day, summary, lessons, stats, cost_usd")
+          .select("book_id, day, summary, lessons, suggestions, stats, cost_usd")
           .in("book_id", claudeIds)
           .order("day", { ascending: false })
           .limit(40)
+      : Promise.resolve({ data: [] as Record<string, unknown>[], error: null }),
+    // Active lessons + suggestions (supabase/ai_notes.sql). Before the table exists this returns an error: none.
+    claudeIds.length
+      ? supabase
+          .from("ai_notes")
+          .select("id, book_id, day, kind, text, created_at")
+          .in("book_id", claudeIds)
+          .is("removed_at", null)
+          .order("day", { ascending: false })
+          .limit(200)
       : Promise.resolve({ data: [] as Record<string, unknown>[], error: null }),
     supabase.from("broker_connections").select("account_hint, connected_at").maybeSingle(),
     supabase.from("ai_runner").select("settings").maybeSingle(),
@@ -400,6 +412,7 @@ export async function loadAiView(
           }))
       ).slice(0, 30),
       reviews: reviewsR.error ? [] : reviewsFrom(reviewsR.data, b.id as string),
+      notes: notesR.error ? [] : notesFrom(notesR.data, b.id as string),
       settings: (b.settings as Record<string, number | string> | null) ?? {},
       weekCostUsd: weekCost.get(b.id as string) ?? 0,
       series: eq.filter((e) => e.book_id === b.id).map((e) => ({ as_of: e.as_of as string, equity: e.equity as number })),

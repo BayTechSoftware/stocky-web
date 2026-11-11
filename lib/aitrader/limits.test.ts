@@ -33,6 +33,7 @@ describe("contract tables", () => {
         ...Object.keys(SCORECARD_WEIGHTS).map((k) => `w_${k}`),
         "breakeven_at_r", "trail_mode", "trail_start_r", "trail_atr_mult", "trail_pct", "partial_pct", "partial_r",
         "time_stop_min", "time_stop_min_r", "time_stop_mode", "market_turn_mode", "market_turn_pct", "review", "review_model",
+        "use_lessons", "lessons_count",
       ].sort()
     );
     expect(keys(RUNNER_LIMITS)).toEqual(
@@ -275,7 +276,7 @@ describe("exit settings", () => {
     expect(d).toEqual({
       breakeven_at_r: 1, trail_mode: "atr", trail_start_r: 1, trail_atr_mult: 2, trail_pct: 1, partial_pct: 0, partial_r: 1,
       time_stop_min: 120, time_stop_min_r: 0.3, time_stop_mode: "wake", market_turn_mode: "wake", market_turn_pct: 0.5,
-      review: true, review_model: "haiku",
+      review: true, review_model: "haiku", use_lessons: true, lessons_count: 8,
     });
     expect(EXIT_LIMITS.every((x) => x.group === "Exits")).toBe(true);
     expect(defsForBook("claude-free").filter((x) => x.group === "Exits")).toHaveLength(EXIT_LIMITS.length);
