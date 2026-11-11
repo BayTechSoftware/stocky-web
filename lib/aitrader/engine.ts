@@ -37,6 +37,7 @@ import {
   haltReason,
   keepLegReason,
   middaySkip,
+  offSkip,
   mylistCandidates,
   planEntry,
   reentrySkip,
@@ -597,7 +598,11 @@ async function runForUser(admin: Admin, mode: RunMode, books: BookRow[], creds: 
       /* f) new entries */
       const lookupSkip = shortLookupSkip(shorts);
       const midday = middaySkip(R, clock.is_open);
-      if (!halted && midday) {
+      const off = offSkip(R);
+      if (off) {
+        decisions.push({ symbol: "—", action: "skip", reason: off });
+        notes.push(off);
+      } else if (!halted && midday) {
         decisions.push({ symbol: "—", action: "skip", reason: midday });
       } else if (!halted && lookupSkip) {
         decisions.push({ symbol: "—", action: "skip", reason: lookupSkip });

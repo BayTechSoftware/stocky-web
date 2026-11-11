@@ -47,6 +47,7 @@ const SYMBOL_RE = /^[A-Z0-9.]{1,10}$/;
 const TAG_RE = /^[a-z][a-z_]{0,29}$/;
 
 export const RULES_LIMITS: LimitDef[] = [
+  { key: "enabled", group: "Risk & size", label: "Box is on", kind: "bool", def: true, hint: "off = the cron and Run buttons place no new trades for this box; open positions keep their protective orders" },
   // Risk & size
   { key: "budget", group: "Risk & size", label: "Box size", unit: "$", kind: "number", min: 100, max: 1_000_000, def: 5000, hint: "the box's starting cash; profit and loss are measured from it" },
   { key: "risk_pct", group: "Risk & size", label: "Most I can lose on one trade", unit: "%", kind: "number", min: 0.01, max: 100, def: 1, hint: "of the box's current value, if the trade hits its stop (the price where it sells at a loss)" },
@@ -238,6 +239,7 @@ export const CLAUDE_EXTRA_LIMITS: LimitDef[] = [
 ];
 
 export const CLAUDE_LIMITS: LimitDef[] = [
+  { key: "enabled", group: "Risk & size", label: "Box is on", kind: "bool", def: true, hint: "off = the watcher starts no Claude runs for this box (no scans, no review); the Mac still manages exits for what it holds" },
   // Risk & size
   { key: "budget", group: "Risk & size", label: "Box size", unit: "$", kind: "number", min: 100, max: 1_000_000, def: 5000, hint: "what Claude sizes its trades from" },
   { key: "max_loss_per_trade_usd", group: "Risk & size", label: "Most I can lose on one trade", unit: "$", kind: "number", min: 1, max: 1_000_000, def: 50, hint: "if the trade hits its stop" },
@@ -475,4 +477,11 @@ export function effective(defs: LimitDef[], saved: Record<string, unknown> | nul
     out[d.key] = v === undefined || v === null ? d.def : (v as LimitValue);
   }
   return out;
+}
+
+/** Whether a box is switched on (settings.enabled; missing or unreadable = on, like every default). */
+export function boxEnabled(settings: Record<string, unknown> | null | undefined): boolean {
+  const v = settings?.enabled;
+  if (v === undefined || v === null) return true;
+  return parseBool(v) !== false;
 }

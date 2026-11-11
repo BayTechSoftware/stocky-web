@@ -38,3 +38,15 @@ describe("the engine re-clamps saved values (fix #10)", () => {
     expect(R.maxStopPct).toBeGreaterThanOrEqual(R.minStopPct);
   });
 });
+
+describe("reset keeps the box on/off switch", () => {
+  it("budget + enabled survive the reset's keep-set (what resetBookLimits stores)", () => {
+    for (const defs of [rulesDefs("mylist"), CLAUDE_LIMITS]) {
+      const keepDefs = defs.filter((d) => d.key === "budget" || d.key === "enabled");
+      const keep = validateLimits(keepDefs, { budget: 7000, enabled: false });
+      expect(keep.ok && overridesOnly(defs, keep.settings)).toEqual({ budget: 7000, enabled: false });
+      const on = validateLimits(keepDefs, { enabled: undefined });
+      expect(on.ok && overridesOnly(defs, on.settings)).toEqual({});
+    }
+  });
+});

@@ -7,8 +7,10 @@ import {
   SCORECARD_WEIGHTS,
   RULES_LIMITS,
   RUNNER_LIMITS,
+  clampSaved,
   defsForBook,
   effective,
+  overridesOnly,
   rulesDefs,
   validateLimits,
 } from "./limits";
@@ -37,7 +39,7 @@ describe("contract tables", () => {
         "time_stop_min", "time_stop_min_r", "time_stop_mode", "market_turn_mode", "market_turn_pct", "review", "review_model",
         "use_lessons", "lessons_count", "shadow_review",
         "market_read", "flatten_backup", "entry_orders", "bear_fail_closed", "min_stop_atr", "max_breakout_age_min",
-        "lesson_min_trades",
+        "lesson_min_trades", "enabled",
       ].sort()
     );
     expect(keys(RUNNER_LIMITS)).toEqual(
@@ -48,7 +50,7 @@ describe("contract tables", () => {
     );
     expect(keys(RULES_LIMITS)).toEqual(
       [
-        "budget", "risk_pct", "max_position_pct", "cash_buffer_pct", "max_positions", "max_new_per_run",
+        "enabled", "budget", "risk_pct", "max_position_pct", "cash_buffer_pct", "max_positions", "max_new_per_run",
         "daily_loss_halt_pct", "reward_risk", "atr_mult", "min_stop_pct", "max_stop_pct", "entry_slip_pct",
         "entry_valid_days", "min_price", "min_score", "max_signal_age_days", "enter_on_watch", "exit_on_overbought", "max_hold_days",
         "max_rsi", "uptrend_only", "universe_add", "universe_remove", "midday_entries", "reentry_cooldown_days", "max_gap_down_pct", "min_atr_pct",
@@ -150,6 +152,35 @@ describe("validateLimits", () => {
     expect(effective(CLAUDE_LIMITS, {}).max_trades_per_day).toBe(3);
     expect(effective(RUNNER_LIMITS, {}).model).toBe("sonnet");
     expect(effective(CLAUDE_LIMITS, { no_entries_after: "" }).no_entries_after).toBe(""); // stored off stays off
+  });
+});
+
+describe("enabled (box on/off)", () => {
+  it("is a bool defaulting to true in both the Rules and Claude boxes", () => {
+    for (const d of [...rulesDefs("mylist"), ...rulesDefs("free"), ...CLAUDE_LIMITS].filter((x) => x.key === "enabled")) {
+      expect(d.kind).toBe("bool");
+      expect(d.def).toBe(true);
+    }
+    expect(rulesDefs("mylist").some((d) => d.key === "enabled")).toBe(true);
+    expect(rulesDefs("free").some((d) => d.key === "enabled")).toBe(true);
+    expect(CLAUDE_LIMITS.some((d) => d.key === "enabled")).toBe(true);
+  });
+  it("validates, stores only when off, and resets to on", () => {
+    for (const defs of [rulesDefs("free"), CLAUDE_LIMITS]) {
+      const off = validateLimits(defs, { enabled: "false" });
+      expect(off.ok && off.settings.enabled).toBe(false);
+      expect(overridesOnly(defs, { enabled: false })).toEqual({ enabled: false });
+      expect(overridesOnly(defs, { enabled: true })).toEqual({});
+      expect(effective(defs, {}).enabled).toBe(true);
+      expect(effective(defs, { enabled: false }).enabled).toBe(false);
+      expect(clampSaved(defs, { enabled: "off" }).enabled).toBe(false);
+      const reset = validateLimits(defs, {});
+      expect(reset.ok && reset.settings).toEqual({});
+    }
+  });
+  it("rulesFor reads it", () => {
+    expect(rulesFor({}, "mylist").enabled).toBe(true);
+    expect(rulesFor({ enabled: false }, "free").enabled).toBe(false);
   });
 });
 

@@ -178,6 +178,41 @@ describe("engine harness: midday entries + re-entry cooldown (fix #8)", () => {
   });
 });
 
+describe("engine harness: box switched off", () => {
+  it("places no entry (cron, manual, dry) but still records the snapshot", async () => {
+    for (const mode of ["cron", "manual", "dry"] as const) {
+      alp = fakeAlpaca();
+      const db = entryWorld({ enabled: false });
+      const [r] = await run(db, mode);
+      expect(alp.submitted, mode).toEqual([]);
+      expect(r.decisions.some((d) => d.action === "buy"), mode).toBe(false);
+      expect(r.decisions.some((d) => /switched off/.test(d.reason)), mode).toBe(true);
+      expect(r.note).toMatch(/switched off/);
+      if (mode !== "dry") expect(db.tables.ai_equity.length).toBe(1);
+    }
+  });
+
+  it("still places the missing stop for a position it holds", async () => {
+    const db = world();
+    db.tables.ai_books[0].settings = { enabled: false };
+    alp.orders.push(fakeOrder({
+      id: "p1", symbol: "AAPL", side: "buy", qty: "10", filled_qty: "10", filled_avg_price: "100", status: "filled",
+      client_order_id: "stk-free-e-AAPL-2026-11-09", order_class: "oto", created_at: "2026-11-09T22:30:00Z",
+      legs: [fakeOrder({ id: "ls", symbol: "AAPL", side: "sell", type: "stop", stop_price: "94", status: "canceled" })],
+    }));
+    db.tables.ai_orders.push({
+      id: "o1", book_id: "book-free", symbol: "AAPL", side: "buy", kind: "entry", qty: 10, stop_price: 94, leg_ids: ["ls"],
+      alpaca_order_id: "p1", client_order_id: "stk-free-e-AAPL-2026-11-09", status: "filled", filled_qty: 10, filled_avg: 100, created_at: "2026-11-09T22:30:00Z",
+    });
+    alp.fills.push({ id: "f1", order_id: "p1", symbol: "AAPL", side: "buy", qty: "10", price: "100", transaction_time: "2026-11-10T14:31:00Z" });
+    alp.bars.AAPL = dailyBars(80, 100);
+    const [r] = await run(db);
+    expect(alp.submitted.length).toBe(1);
+    expect(alp.submitted[0].side).toBe("sell");
+    expect(r.decisions.some((d) => /placed a GTC stop/.test(d.reason))).toBe(true);
+  });
+});
+
 describe("engine harness: box size changes (fix #9)", () => {
   it("a size cut since the last snapshot doesn't trip the daily-loss halt, and cash follows the new size", async () => {
     const db = entryWorld();

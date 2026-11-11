@@ -4,13 +4,13 @@ import { useState, useTransition, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { loadRunDetail, removeNote, runAiTrader } from "../actions";
 import { money, moneySigned, pct, price as fprice, shares } from "@/lib/portfolio";
-import { CLAUDE_LIMITS, RUNNER_LIMITS, SCORECARD_GATE_LABEL, defsForBook, effective, rulesDefs, type LimitValue } from "@/lib/aitrader/limits";
+import { CLAUDE_LIMITS, RUNNER_LIMITS, SCORECARD_GATE_LABEL, boxEnabled, defsForBook, effective, rulesDefs, type LimitValue } from "@/lib/aitrader/limits";
 import type { SettingsSection } from "@/lib/aitrader/layout";
 import { gateVerdict, marketLine, signedPct, type AiReviewShadow, type AiReviewTrade, type AiShadowItem } from "@/lib/aitrader/reviews";
 import type { AiBookView, AiNote, AiReplayDay, AiReview, AiRun, AiRunLite, ClosedTrade, ExitReason } from "@/lib/aitrader/view";
 import { ClaudePlan, LABEL, RunDetail, col, phaseName, when } from "./ai-run";
 import { BacktestPanel } from "./ai-backtest";
-import { BoxSettings, RunnerSettings } from "./ai-settings";
+import { BoxSettings, OffBadge, RunnerSettings } from "./ai-settings";
 
 const BLURB: Record<AiBookView["key"], string> = {
   mylist: "Fixed rules, no AI. Trades your watchlist on Stocky's signals, within your settings. Runs on the website on weekday schedules.",
@@ -900,6 +900,7 @@ export function BookCard({
   initialGroup?: SettingsSection;
 }) {
   const isClaude = b.key.startsWith("claude-");
+  const off = !boxEnabled(b.settings);
   const run = b.lastRun;
   const defs = defsForBook(b.key);
   const [section, setSection] = useState<Section>(initialSection ?? "now");
@@ -969,7 +970,13 @@ export function BookCard({
                 {isClaude ? "Claude" : "Rules"}
               </span>
               <h2 className="font-display text-xl font-semibold tracking-tight text-text">{b.name}</h2>
+              {off && <OffBadge />}
             </div>
+            {off && (
+              <p className="mt-1.5 max-w-prose rounded-md bg-loss/10 px-3 py-2 text-xs leading-snug text-loss">
+                This box is switched off: it places no new trades. Open positions keep their stops and exits. Turn it back on in Settings → Money &amp; risk.
+              </p>
+            )}
             <p className="mt-1.5 max-w-prose text-sm leading-relaxed text-dim">{BLURB[b.key]}</p>
           </div>
           <div className="hidden sm:block">

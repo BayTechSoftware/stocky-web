@@ -29,6 +29,7 @@ export interface Rules {
   uptrendOnly: boolean;
   universeAdd: string[];
   universeRemove: string[];
+  enabled: boolean; // off = no new entries (everything that protects open positions still runs)
   middayEntries: boolean; // runs while the market is open may open new trades
   maxGapDownPct: number; // fraction; 0 = off
   minAtrPct: number; // fraction; 0 = off
@@ -69,6 +70,7 @@ export function rulesFor(settings: Record<string, unknown> | null | undefined, b
     uptrendOnly: bool("uptrend_only"),
     universeAdd: parseSymbols(all.universe_add),
     universeRemove: parseSymbols(all.universe_remove),
+    enabled: bool("enabled"),
     middayEntries: bool("midday_entries"),
     maxGapDownPct: pct("max_gap_down_pct"),
     minAtrPct: pct("min_atr_pct"),

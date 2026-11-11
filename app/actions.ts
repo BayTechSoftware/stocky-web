@@ -414,7 +414,7 @@ export async function saveBookLimits(bookKey: string, values: Record<string, unk
 }
 
 /**
- * Reset one box's limits to the defaults: clears every saved override EXCEPT the box's size (budget),
+ * Reset one box's limits to the defaults: clears every saved override EXCEPT the box's size (budget) and its On/Off switch (enabled),
  * so start_cash, the P&L baseline and the ledger are untouched. Used by the tab's "Reset to defaults".
  */
 export async function resetBookLimits(bookKey: string): Promise<Result> {
@@ -426,12 +426,13 @@ export async function resetBookLimits(bookKey: string): Promise<Result> {
   if (!book) return { error: "no such book" };
   const defs = defsForBook(String(book.key));
   const saved = (book.settings as Record<string, unknown> | null) ?? {};
-  const keep = validateLimits(defs.filter((d) => d.key === "budget"), { budget: saved.budget });
+  // The box size and the On/Off switch survive a reset: a reset must not quietly switch trading back on.
+  const keep = validateLimits(defs.filter((d) => d.key === "budget" || d.key === "enabled"), { budget: saved.budget, enabled: saved.enabled });
   const settings = keep.ok ? overridesOnly(defs, keep.settings) : {};
   const { error } = await createAdminClient().from("ai_books").update({ settings }).eq("id", book.id);
   if (error) return { error: error.message };
   revalidatePath("/dashboard");
-  return { message: "Reset to the defaults (the box size is kept)." };
+  return { message: "Reset to the defaults (the box size and the On/Off switch are kept)." };
 }
 
 /** Record a new box size as a dated cash adjustment (new − current baseline); nothing when the size is unchanged. */

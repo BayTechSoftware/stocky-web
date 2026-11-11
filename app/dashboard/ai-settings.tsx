@@ -86,6 +86,18 @@ function showValue(d: LimitDef, v: LimitValue): string {
   return d.unit ? `${n} ${d.unit}` : String(n);
 }
 
+/** Small "Off" badge for a box that is switched off (Settings → Box is on). */
+export function OffBadge({ className = "" }: { className?: string }) {
+  return (
+    <span
+      title="This box is switched off: it places no new trades. Open positions keep their stops and exits."
+      className={`rounded-full bg-loss/10 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-loss ring-1 ring-inset ring-loss/30 ${className}`}
+    >
+      Off
+    </span>
+  );
+}
+
 /* ---------------- one field ---------------- */
 
 const BOX = "mt-1 flex items-center gap-1 rounded-md border border-border bg-surface px-2 focus-within:border-accent";
@@ -355,14 +367,14 @@ export function BoxSettings({
     const size = Number(budget) || 0;
     if (
       !confirm(
-        `Reset every setting in this box to its default?\n\nThe box size stays at $${size.toLocaleString("en-US")}. Your current values can't be brought back.`
+        `Reset every setting in this box to its default?\n\nThe box size stays at $${size.toLocaleString("en-US")}, and the On/Off switch stays as it is. Your current values can't be brought back.`
       )
     )
       return;
     run(
       () => resetKeepingSize(bookKey, size),
       () => {
-        const fresh = initVals(defs, { budget: size });
+        const fresh = initVals(defs, { budget: size, ...(vals.enabled === "false" ? { enabled: false } : {}) });
         setVals(fresh);
         setBase(fresh);
       }

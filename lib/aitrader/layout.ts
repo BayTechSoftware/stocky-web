@@ -61,7 +61,7 @@ export function sectionOf(d: LimitDef): SettingsSection {
 /** Order inside a section: these keys first, in this order; everything else after, in table order. */
 const ORDER = [
   // Money & risk
-  "budget", "risk_pct", "max_loss_per_trade_usd", "max_daily_loss_usd", "daily_loss_halt_pct", "max_position_pct",
+  "enabled", "budget", "risk_pct", "max_loss_per_trade_usd", "max_daily_loss_usd", "daily_loss_halt_pct", "max_position_pct",
   "max_positions", "max_new_per_run", "cash_buffer_pct", "min_reward_risk",
   "allow_short", "allow_margin", "margin_multiplier", "allow_loosen_stop",
   // When to trade

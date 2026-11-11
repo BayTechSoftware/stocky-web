@@ -154,6 +154,11 @@ export function haltReason(equity: number, prev: number | null | undefined, R: R
   return undefined;
 }
 
+/** Why this box opens nothing new (the Box is on switch is off), or undefined. */
+export function offSkip(R: Rules): string | undefined {
+  return R.enabled ? undefined : "box is switched off — no new trades (open positions keep their stops and exits)";
+}
+
 /** Why a run during market hours opens nothing new (midday_entries off), or undefined. */
 export function middaySkip(R: Rules, marketOpen: boolean): string | undefined {
   return marketOpen && !R.middayEntries ? "no new trades in runs during market hours (setting) — the evening run opens them" : undefined;

@@ -2,12 +2,12 @@
 
 import { useEffect, useState } from "react";
 import { money, moneySigned, pct } from "@/lib/portfolio";
-import { RUNNER_LIMITS, effective } from "@/lib/aitrader/limits";
+import { RUNNER_LIMITS, boxEnabled, effective } from "@/lib/aitrader/limits";
 import type { SettingsSection } from "@/lib/aitrader/layout";
 import type { AiBookView, AiView } from "@/lib/aitrader/view";
 import { LABEL, claudeNowLine, when } from "./ai-run";
 import { BookCard, col } from "./ai-book";
-import { ConnectCard, UsageMeter } from "./ai-settings";
+import { ConnectCard, OffBadge, UsageMeter } from "./ai-settings";
 import LiveUpdates from "./ai-live";
 
 type Open = { tab: string; section?: "settings"; group?: SettingsSection; n: number };
@@ -27,7 +27,10 @@ function GridCell({ b, onOpen }: { b: AiBookView | undefined; onOpen: (key: stri
       onClick={() => onOpen(b.key)}
       className="w-full rounded-xl border border-border bg-surface p-3 text-left transition hover:border-accent/50 hover:bg-surface2/40"
     >
-      <div className="font-display text-lg font-semibold text-text tnum">{money(b.equity, 2)}</div>
+      <div className="flex items-center justify-between gap-2">
+        <div className="font-display text-lg font-semibold text-text tnum">{money(b.equity, 2)}</div>
+        {!boxEnabled(b.settings) && <OffBadge />}
+      </div>
       <div className={`font-mono text-xs tnum ${col(b.pnl)}`}>
         {moneySigned(b.pnl, 2)} ({pct(b.pnlPct)}) all time
       </div>
@@ -131,7 +134,7 @@ export default function AiTrader({ ai }: { ai: AiView | null }) {
 
       <nav className="-mx-4 overflow-x-auto px-4 md:mx-0 md:px-0" aria-label="AI Trader boxes">
         <div className="flex min-w-max gap-1 rounded-xl border border-border bg-surface p-1">
-          {[{ key: "overview", name: "Overview", isClaude: null as boolean | null, pnl: null as number | null }, ...books.map((b) => ({ key: b.key as string, name: b.name, isClaude: b.key.startsWith("claude-"), pnl: b.pnl }))].map((t) => {
+          {[{ key: "overview", name: "Overview", isClaude: null as boolean | null, pnl: null as number | null, off: false }, ...books.map((b) => ({ key: b.key as string, name: b.name, isClaude: b.key.startsWith("claude-"), pnl: b.pnl, off: !boxEnabled(b.settings) }))].map((t) => {
             const on = (current?.key ?? "overview") === t.key;
             return (
               <button
@@ -144,6 +147,7 @@ export default function AiTrader({ ai }: { ai: AiView | null }) {
                   <span className={`h-1.5 w-1.5 rounded-full ${t.isClaude ? "bg-accent" : "bg-faint"}`} aria-hidden />
                 )}
                 <span className="whitespace-nowrap font-medium">{t.name}</span>
+                {t.off && <OffBadge />}
                 {t.pnl != null && <span className={`font-mono text-xs tnum ${col(t.pnl)}`}>{moneySigned(t.pnl, 0)}</span>}
               </button>
             );
@@ -188,7 +192,10 @@ export default function AiTrader({ ai }: { ai: AiView | null }) {
                     <li key={b.key} className="py-2">
                       <button onClick={() => pick(b.key)} className="w-full text-left">
                         <div className="flex flex-wrap items-baseline justify-between gap-2">
-                          <span className="font-display text-sm font-semibold text-text">{b.name}</span>
+                          <span className="flex items-center gap-2 font-display text-sm font-semibold text-text">
+                            {b.name}
+                            {!boxEnabled(b.settings) && <OffBadge />}
+                          </span>
                           <span className="font-mono text-[11px] text-faint">{b.lastRun ? `checked ${when(b.lastRun.ran_at)}` : "not run yet"}</span>
                         </div>
                         <p className="mt-0.5 line-clamp-2 text-[13px] leading-snug text-dim">
