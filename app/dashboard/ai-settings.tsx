@@ -44,7 +44,7 @@ export function toForm(d: LimitDef, v: LimitValue | undefined): string {
   const x = v === undefined ? d.def : v;
   if (d.kind === "bool") return x === true || x === "true" ? "true" : "false";
   if (d.kind === "time") return x === "" || x === "off" ? "off" : String(x);
-  if (d.kind === "symbols" || d.kind === "tags") return String(x).split(",").map((s) => s.trim()).filter(Boolean).join(", ");
+  if (d.kind === "symbols" || d.kind === "tags" || d.kind === "words") return String(x).split(",").map((s) => s.trim()).filter(Boolean).join(", ");
   return String(x);
 }
 
@@ -54,7 +54,7 @@ export function isDefault(d: LimitDef, s: string | undefined): boolean {
   const def = toForm(d, d.def);
   if (d.kind === "number") return Number(s) === Number(d.def);
   if (d.kind === "symbols") return parseSymbols(s).join(",") === parseSymbols(def).join(",");
-  if (d.kind === "tags") {
+  if (d.kind === "tags" || d.kind === "words") {
     const norm = (t: string) => Array.from(new Set(t.split(/[\s,;]+/).map((x) => x.trim().toLowerCase()).filter(Boolean))).join(",");
     return norm(s) === norm(def);
   }
@@ -79,6 +79,7 @@ function showValue(d: LimitDef, v: LimitValue): string {
     return list.length > 4 ? `${list.slice(0, 4).join(", ")}…` : list.join(", ");
   }
   if (d.kind === "select") return d.optionLabels?.[String(v)] ?? String(v);
+  if (d.kind === "words") return String(v).split(",").filter(Boolean).map((w) => d.optionLabels?.[w] ?? w).join(", ");
   const n = Number(v);
   if (d.unit === "$") return `$${n.toLocaleString("en-US")}`;
   if (d.unit === "%") return `${n}%`;
@@ -164,6 +165,29 @@ function Field({ d, value, set }: { d: LimitDef; value: string; set: (v: string)
       </span>
     );
   }
+  if (d.kind === "words") {
+    const on = value.split(/[\s,;]+/).filter(Boolean);
+    const toggle = (o: string, checked: boolean) => {
+      const next = (d.options ?? []).filter((x) => (x === o ? checked : on.includes(x)));
+      if (next.length) set(next.join(", ")); // at least one stays on
+    };
+    return (
+      <span className="mt-1 flex flex-wrap gap-x-4 gap-y-1.5" id={id}>
+        {d.options?.map((o) => (
+          <label key={o} className="flex cursor-pointer items-center gap-1.5 text-xs text-text">
+            <input
+              type="checkbox"
+              checked={on.includes(o)}
+              disabled={on.includes(o) && on.length === 1}
+              onChange={(e) => toggle(o, e.target.checked)}
+              className="accent-[var(--color-accent)]"
+            />
+            {d.optionLabels?.[o] ?? o}
+          </label>
+        ))}
+      </span>
+    );
+  }
   if (d.kind === "symbols" || d.kind === "tags") {
     return (
       <span className={BOX}>
@@ -202,7 +226,7 @@ function Field({ d, value, set }: { d: LimitDef; value: string; set: (v: string)
 /** One labelled setting: label, a dot + "default X" + revert when changed, the input, a readable hint. */
 function Row({ d, value, set, extra }: { d: LimitDef; value: string; set: (v: string) => void; extra?: ReactNode }) {
   const changed = !isDefault(d, value);
-  const wide = d.kind === "symbols" || d.kind === "tags";
+  const wide = d.kind === "symbols" || d.kind === "tags" || d.kind === "words";
   return (
     <div className={`min-w-0 ${wide ? "sm:col-span-2" : ""}`}>
       <div className="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-0.5">
@@ -296,6 +320,7 @@ function resetKeepingSize(bookKey: string, _budget: number): Promise<Result> {
 
 const NOT_APPLICABLE: Partial<Record<SettingsSection, { rules?: string; claude?: string }>> = {
   "When to trade": { rules: "Rules boxes run on fixed weekday schedules; there is no buying window to set." },
+  "In-play board": { rules: "Doesn't apply: Rules boxes follow their own list and signals; only the Claude · Free Choice box uses the board." },
   Checks: { rules: "Doesn't apply: Rules boxes buy on fixed signals, with no scorecard or second opinion." },
   Learning: { rules: "Doesn't apply: Rules boxes don't learn; they follow these settings exactly." },
 };
@@ -305,6 +330,8 @@ const SECTION_BLURB: Partial<Record<SettingsSection, string>> = {
   "When to trade": "The buying window and when everything is sold.",
   "What to trade": "Which stocks are in or out.",
   "How it decides": "How a stock gets picked and bought.",
+  "In-play board":
+    "Free Choice box only. The Mac watches the whole market for stocks that are moving with unusual volume, finds a buy point and a stop for each, and wakes Claude on the best ones.",
   Checks: "What each stock must pass before a buy. Tell Claude = Claude is told and decides; Stop the trade = the Mac refuses it.",
   Learning: "The review after each close, and the lessons Claude reads the next morning.",
   Exits: "How open trades are protected and sold.",

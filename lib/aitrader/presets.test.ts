@@ -37,7 +37,7 @@ describe("new Claude keys", () => {
   it("have the agreed defaults", () => {
     const e = effective(CLAUDE_LIMITS, {});
     expect([e.market_read, e.flatten_backup, e.entry_orders, e.bear_fail_closed, e.min_stop_atr, e.max_breakout_age_min, e.lesson_min_trades]).toEqual([
-      true, true, "market_limit", false, 0, 0, 0,
+      true, true, "all", false, 0, 0, 0,
     ]);
   });
 });

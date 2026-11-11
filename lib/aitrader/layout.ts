@@ -11,6 +11,7 @@ export const SECTIONS = [
   "When to trade",
   "What to trade",
   "How it decides",
+  "In-play board",
   "Checks",
   "Learning",
   "Exits",
@@ -26,6 +27,7 @@ const GROUP_SECTION: Record<string, SettingsSection> = {
   Strategy: "What to trade",
   Universe: "What to trade",
   Rules: "How it decides",
+  "In-play board": "In-play board",
   "Entries & exits": "Exits",
   Scorecard: "How it decides",
   "Scorecard weights": "How it decides",
@@ -70,16 +72,18 @@ const ORDER = [
   "blocked", "universe_remove", "universe_add", "allow_reentry",
   // How it decides
   "entry_orders", "scorecard", "min_score",
+  // In-play board
+  "board", "board_top_n", "board_setups", "board_regime", "regime_pct", "inplay_min_change_pct", "inplay_min_rvol", "inplay_min_price", "stop_max_datr",
   // Checks
   "market_read", "bear_mode", "bear_block_conf", "bear_fail_closed", "bear_model", "memory_trades",
   // Learning
   "review", "review_model", "shadow_review", "use_lessons", "lessons_count", "lesson_min_trades",
   // Exits
-  "reward_risk", "atr_mult", "breakeven_at_r", "trail_mode", "trail_start_r", "trail_atr_mult", "trail_pct",
+  "reward_risk", "atr_mult", "target_r", "breakeven_at_r", "trail_mode", "trail_start_r", "trail_atr_mult", "trail_pct",
   "partial_pct", "partial_r", "time_stop_mode", "time_stop_min", "time_stop_min_r", "market_turn_mode", "market_turn_pct",
   // Schedule & cost
   "model", "interval_min", "weekly_cap_usd", "throttle_pct", "throttle_interval_min", "premarket_early", "premarket_time",
-  "news_wake", "news_scope", "web_news",
+  "news_wake", "news_scope", "wake_min_gap_min", "news_ticker_cooldown_min", "web_news",
 ];
 
 export function sortDefs(defs: LimitDef[]): LimitDef[] {
@@ -97,7 +101,7 @@ export function sortDefs(defs: LimitDef[]): LimitDef[] {
 const ADVANCED = new Set([
   "earnings_window_days", "max_vwap_atr", "max_adr_used", "extension_penalty",
   "max_orders_per_day", "max_order_usd", "min_order_usd", "fractional", "pdt_guard", "min_stop_pct", "min_stop_atr",
-  "or_minutes", "max_breakout_age_min",
+  "or_minutes", "max_breakout_age_min", "inplay_min_price", "regime_pct", "stop_max_datr",
   "flatten_lead_min", "run_timeout_s", "news_tags", "wake_min_gap_min",
 ]);
 
@@ -132,6 +136,15 @@ const SHOW_IF: Record<string, (v: Record<string, string>) => boolean> = {
   review_model: (v) => on(v.review),
   throttle_interval_min: (v) => pos(v.throttle_pct) && pos(v.weekly_cap_usd),
   wake_min_gap_min: (v) => on(v.news_wake),
+  news_ticker_cooldown_min: (v) => on(v.news_wake),
+  board_top_n: (v) => on(v.board),
+  inplay_min_price: (v) => on(v.board),
+  inplay_min_change_pct: (v) => on(v.board),
+  inplay_min_rvol: (v) => on(v.board),
+  board_regime: (v) => on(v.board),
+  regime_pct: (v) => on(v.board) && v.board_regime !== "off",
+  board_setups: (v) => on(v.board),
+  stop_max_datr: (v) => on(v.board),
   news_tags: (v) => on(v.news_wake),
 };
 

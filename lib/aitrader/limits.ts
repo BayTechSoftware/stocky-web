@@ -14,7 +14,7 @@
  *   RUNNER_LIMITS — how and when the Mac runs Claude (ai_runner.settings).
  */
 
-export type LimitKind = "number" | "time" | "bool" | "symbols" | "tags" | "select";
+export type LimitKind = "number" | "time" | "bool" | "symbols" | "tags" | "select" | "words";
 export type BoxKey = "mylist" | "free";
 export type LimitValue = number | string | boolean;
 
@@ -35,9 +35,9 @@ export interface LimitDef {
   tmin?: string;
   tmax?: string;
   allowOff?: boolean;
-  /** select: the allowed values. */
+  /** select / words: the allowed values (words: any subset, stored as a comma list in this order). */
   options?: string[];
-  /** select: how each stored value reads in the form (the stored value is unchanged). */
+  /** select / words: how each stored value reads in the form (the stored value is unchanged). */
   optionLabels?: Record<string, string>;
   only?: BoxKey; // rules-only fields that apply to one box
 }
@@ -120,7 +120,7 @@ const SCORECARD_GATE_HINT: Record<string, string> = {
   trigger: "the buy rule (a break above the first minutes' range or a key price) fired and is still holding",
   room: "distance to the next key price, in multiples of the risk, at least the minimum below",
   rr_size: "the planned upside is at least the minimum × the risk, and the trade fits the size limits",
-  extension: "price is too far above today's average price, or the stock already moved much more than usual today; such stocks lose points",
+  extension: "price is stretched far past its short-term average, or the stock already moved much more than its usual daily range since the open; such stocks lose points",
 };
 
 /** Default weights (sum 100). Weights are relative: the score is normalised over the components with data. */
@@ -156,7 +156,7 @@ export const CHECK_LIMITS: LimitDef[] = [
   { key: "bear_mode", group: "Checks", label: "Second opinion against each trade", kind: "select", options: ["off", "warn", "block"], optionLabels: GATE_OPTION_LABEL, def: "warn", hint: "a separate, cheap Claude call argues against each trade first. Tell Claude: it must answer the case. Stop the trade: the trade is stopped when the case against wins" },
   { key: "bear_block_conf", group: "Checks", label: "Stop the trade when the case against is at least", unit: "%", kind: "number", min: 0, max: 100, int: true, def: 70, hint: "how sure the second opinion is" },
   { key: "bear_model", group: "Checks", label: "Second opinion model", kind: "select", options: ["haiku", "sonnet", "opus"], optionLabels: MODEL_LABEL, def: "haiku", hint: "counts toward the weekly usage cap" },
-  { key: "memory_trades", group: "Checks", label: "Past trades Claude sees per stock", unit: "", kind: "number", min: 0, max: 20, int: true, def: 5, hint: "Claude sees its own last trades in a stock before trading it again; 0 = off" },
+  { key: "memory_trades", group: "Checks", label: "Past trades Claude sees per stock", unit: "", kind: "number", min: 0, max: 20, int: true, def: 0, hint: "how many of this box's past trades in a stock Claude (and the second opinion) sees. 0 = none (the default: \"lost here before\" made Claude pass on good setups)" },
   { key: "sentiment", group: "Checks", label: "Social media mood (StockTwits)", kind: "select", options: ["off", "stocktwits"], optionLabels: { off: "Off", stocktwits: "StockTwits" }, def: "off", hint: "adds bullish/bearish chatter to the score. StockTwits currently blocks automated access, so it has no effect yet" },
   // Same shape as the generated w_* weights (Scorecard weights), shown next to the switch it belongs to.
   { key: "w_sentiment", group: "Checks", label: "Social media mood weight", unit: "", kind: "number", min: 0, max: 100, def: 10, hint: "only when social media mood is on" },
@@ -169,8 +169,8 @@ export const SCORECARD_LIMITS: LimitDef[] = [
   { key: "min_avg_dollar_vol", group: "Scorecard", label: "Least dollars traded per day", unit: "$", kind: "number", min: 0, max: 1_000_000_000_000, def: 5_000_000, hint: "20-day average" },
   { key: "min_rvol", group: "Scorecard", label: "How much busier than usual", unit: "×", kind: "number", min: 0, max: 100, def: 1, hint: "today's volume vs the usual volume by this time of day; 1 = normal" },
   { key: "earnings_window_days", group: "Scorecard", label: "Earnings count as news within", unit: "days", kind: "number", min: 0, max: 30, int: true, def: 1 },
-  { key: "max_vwap_atr", group: "Scorecard", label: "Don't chase: price above today's average by more than", unit: "×", kind: "number", min: 0.1, max: 20, def: 1.5, hint: "in normal 5-minute swings (below, for a short). Past this a breakout counts as a chase" },
-  { key: "max_adr_used", group: "Scorecard", label: "Don't chase: moved more than usual today, by", unit: "×", kind: "number", min: 0.1, max: 20, def: 2, hint: "today's move so far vs the stock's average daily move over 20 days" },
+  { key: "max_vwap_atr", group: "Scorecard", label: "Don't chase: how far past its short-term average", unit: "×", kind: "number", min: 0.1, max: 20, def: 1.5, hint: "how far the price may be beyond its 5-minute 9-EMA (above for a buy, below for a short), measured in the stock's normal daily ranges (daily ATRs). Further out counts as chasing" },
+  { key: "max_adr_used", group: "Scorecard", label: "Don't chase: how far since the open", unit: "×", kind: "number", min: 0.1, max: 20, def: 2, hint: "how far the stock may have moved since the open, in daily ATRs (its normal daily range). More than this counts as chasing" },
   { key: "extension_penalty", group: "Scorecard", label: "Don't chase: score points taken off", unit: "", kind: "number", min: 0, max: 100, def: 15, hint: "on top of its weight; 0 = only the weight" },
   ...SCORECARD_GATES.map(
     (g): LimitDef => ({
@@ -231,11 +231,29 @@ export const EXIT_LIMITS: LimitDef[] = [
 export const CLAUDE_EXTRA_LIMITS: LimitDef[] = [
   { key: "market_read", group: "Checks", label: "Show Claude the market's mood each run", kind: "bool", def: true, hint: "SPY and QQQ against today's average price, and how many breakouts are still holding. Information only; never stops a trade" },
   { key: "flatten_backup", group: "When to trade", label: "Mac sells leftovers at 'Sell everything by'", kind: "bool", def: true, hint: "if Claude hasn't closed everything by that time, the Mac sells the remaining shares" },
-  { key: "entry_orders", group: "How it decides", label: "Order types Claude may use to buy", kind: "select", options: ["market_limit", "all"], optionLabels: { market_limit: "Market or limit (now)", all: "Also wait at a price (buy-stop or pullback limit)" }, def: "market_limit" },
+  { key: "entry_orders", group: "How it decides", label: "Order types Claude may use to buy", hint: "the In-play board's armed setups wait at their trigger price, so they need the second choice", kind: "select", options: ["market_limit", "all"], optionLabels: { market_limit: "Market or limit (now)", all: "Also wait at a price (buy-stop or pullback limit)" }, def: "all" },
   { key: "bear_fail_closed", group: "Checks", label: "If the second opinion can't run, stop the trade", kind: "bool", def: false, hint: "only when the second opinion is set to Stop the trade" },
   { key: "min_stop_atr", group: "Money & risk", label: "Stop at least this many normal 5-minute swings away", unit: "×", kind: "number", min: 0, max: 5, def: 0, hint: "measured on 5-minute bars (ATR) at the time of the scorecard; 0 = off" },
   { key: "max_breakout_age_min", group: "How it decides", label: "Treat a breakout older than this as late", unit: "min", kind: "number", min: 0, max: 240, int: true, def: 0, hint: "minutes; 0 = off" },
+  { key: "target_r", group: "Exits", label: "Take profit at (× the risk) on in-play board trades", unit: "×", kind: "number", min: 0, max: 20, def: 2, hint: "2 = sell at a profit twice the amount risked. 0 = no fixed target: the stop and the trailing stop end the trade (a runner). Claude can still name its own target on a trade" },
   { key: "lesson_min_trades", group: "Learning", label: "Trades needed before Claude writes lessons", unit: "", kind: "number", min: 0, max: 200, int: true, def: 0, hint: "0 = any time; around 20 avoids lessons drawn from noise" },
+];
+
+/**
+ * The intraday board (Free Choice only; the My List box ignores these): the Mac ranks the whole market and
+ * finds setups with a trigger and a stop. Mirrors docs/SETTINGS_CONTRACT.md "Intraday board".
+ */
+export const BOARD_SETUPS = ["orb", "hod", "pullback", "reclaim", "bounce"];
+export const BOARD_LIMITS: LimitDef[] = [
+  { key: "board", group: "In-play board", label: "Use the in-play board", kind: "bool", def: true, hint: "the Mac ranks the whole market every ~2 minutes for stocks that are moving today, finds a buy point and stop for each, and wakes Claude on the best. Off = the older once-a-day opening-range scan" },
+  { key: "board_top_n", group: "In-play board", label: "Stocks shown per side", unit: "", kind: "number", min: 1, max: 30, int: true, def: 10, hint: "how many rising stocks Claude sees (half as many falling ones for shorts) and how many the Mac watches for wake-ups. Fewer = fewer wake-ups and a cheaper week" },
+  { key: "inplay_min_price", group: "In-play board", label: "Lowest share price", unit: "$", kind: "number", min: 0, max: 100_000, def: 5, hint: "stocks under this price never make the board" },
+  { key: "inplay_min_change_pct", group: "In-play board", label: "Must be up or down at least", unit: "%", kind: "number", min: 0, max: 100, def: 2, hint: "versus yesterday's close, in either direction, to count as in play" },
+  { key: "inplay_min_rvol", group: "In-play board", label: "Must be this much busier than usual", unit: "×", kind: "number", min: 0, max: 100, def: 1.5, hint: "trading volume so far today versus a normal day by this time (1.5 = half as much again)" },
+  { key: "board_regime", group: "In-play board", label: "Follow the market's direction", kind: "select", options: ["off", "inform", "filter"], optionLabels: { off: "Ignore", inform: "Show Claude", filter: "Hide trades against it" }, def: "filter", hint: "SPY and QQQ together. Show Claude: the board's header says which way the market is going. Hide trades against it: when both are clearly up there are no shorts on the board, when both are clearly down no buys" },
+  { key: "regime_pct", group: "In-play board", label: "A clear up or down market is at least", unit: "%", kind: "number", min: 0, max: 10, def: 0.3, hint: "how far SPY and QQQ must both be from yesterday's close" },
+  { key: "board_setups", group: "In-play board", label: "Kinds of setup to look for", kind: "words", options: BOARD_SETUPS, optionLabels: { orb: "Range break", hod: "New high of day", pullback: "First pullback", reclaim: "VWAP reclaim", bounce: "Failed bounce (short)" }, def: "orb,hod,pullback", hint: "Range break: through the opening range (or below it, for a short). New high of day: a new high (or low) after a pause. First pullback: a dip to buy in an uptrend. VWAP reclaim and Failed bounce are off by default; they lost money in the replays" },
+  { key: "stop_max_datr", group: "In-play board", label: "Widest stop allowed", unit: "×", kind: "number", min: 0.1, max: 5, def: 0.5, hint: "a board setup's stop is never further from its buy point than this many daily ATRs (the stock's normal daily range). Wider setups are tightened or skipped" },
 ];
 
 export const CLAUDE_LIMITS: LimitDef[] = [
@@ -269,6 +287,7 @@ export const CLAUDE_LIMITS: LimitDef[] = [
   ...SCORECARD_LIMITS,
   ...EXIT_LIMITS,
   ...CLAUDE_EXTRA_LIMITS,
+  ...BOARD_LIMITS,
 ];
 
 export const RUNNER_LIMITS: LimitDef[] = [
@@ -286,6 +305,7 @@ export const RUNNER_LIMITS: LimitDef[] = [
   // News
   { key: "news_wake", group: "News", label: "Wake Claude on important news", kind: "bool", def: true },
   { key: "wake_min_gap_min", group: "News", label: "Wait at least this long between news wake-ups", unit: "min", kind: "number", min: 1, max: 120, int: true, def: 5 },
+  { key: "news_ticker_cooldown_min", group: "News", label: "Wait this long before waking on the same stock again", unit: "min", kind: "number", min: 0, max: 600, int: true, def: 60, hint: "for a stock the box does not hold; new articles on the same story are marked seen meanwhile. Stocks it holds always wake Claude. 0 = off" },
   { key: "news_scope", group: "News", label: "News about", kind: "select", options: ["held", "held_and_list"], optionLabels: { held: "Stocks held", held_and_list: "Stocks held + my list" }, def: "held_and_list", hint: "\"+ my list\": the Claude · My List box also watches your list" },
   { key: "news_tags", group: "News", label: "Kinds of news that wake Claude", kind: "tags", def: "earnings,deal,legal,risk,halt,regulatory,people,analyst,capital,macro", hint: "comma-separated, lowercase" },
   { key: "web_news", group: "News", label: "Claude may read full stories on the web", kind: "bool", def: true },
@@ -366,6 +386,15 @@ export function validateLimits(
       if (s === "") continue;
       if (!d.options?.includes(s)) errors.push(`${d.label}: choose one of ${d.options?.join(", ")}`);
       else out[d.key] = s;
+    } else if (d.kind === "words") {
+      const got = String(v).split(/[\s,;]+/).map((x) => x.trim().toLowerCase()).filter(Boolean);
+      if (got.length === 0) continue; // empty = default
+      const bad = got.filter((x) => !d.options?.includes(x));
+      if (bad.length) {
+        errors.push(`${d.label}: choose from ${d.options?.join(", ")}`);
+        continue;
+      }
+      out[d.key] = (d.options ?? []).filter((o) => got.includes(o)).join(","); // the Mac's order
     } else if (d.kind === "symbols" || d.kind === "tags") {
       const list =
         d.kind === "symbols"

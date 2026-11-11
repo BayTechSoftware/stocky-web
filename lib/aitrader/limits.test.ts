@@ -14,6 +14,7 @@ import {
   rulesDefs,
   validateLimits,
 } from "./limits";
+import { sectionOf } from "./layout";
 import { RULES, anchorToFill, bracket, entryOrderBody, isStaleEntry, reservedCash, rulesFor, sizeQty } from "./plan";
 
 const ok = (v: ReturnType<typeof validateLimits>) => {
@@ -40,12 +41,14 @@ describe("contract tables", () => {
         "use_lessons", "lessons_count", "shadow_review",
         "market_read", "flatten_backup", "entry_orders", "bear_fail_closed", "min_stop_atr", "max_breakout_age_min",
         "lesson_min_trades", "enabled",
+        "board", "board_top_n", "inplay_min_price", "inplay_min_change_pct", "inplay_min_rvol", "target_r",
+        "board_regime", "regime_pct", "board_setups", "stop_max_datr",
       ].sort()
     );
     expect(keys(RUNNER_LIMITS)).toEqual(
       [
         "model", "interval_min", "weekly_cap_usd", "throttle_pct", "throttle_interval_min", "run_timeout_s",
-        "wake_min_gap_min", "news_wake", "news_scope", "news_tags", "premarket_early", "premarket_time", "flatten_lead_min", "web_news",
+        "wake_min_gap_min", "news_ticker_cooldown_min", "news_wake", "news_scope", "news_tags", "premarket_early", "premarket_time", "flatten_lead_min", "web_news",
       ].sort()
     );
     expect(keys(RULES_LIMITS)).toEqual(
@@ -330,7 +333,7 @@ describe("exit settings", () => {
       review: true, shadow_review: true, review_model: "haiku", use_lessons: true, lessons_count: 8,
     });
     expect(EXIT_LIMITS.every((x) => x.group === "Exits")).toBe(true);
-    expect(defsForBook("claude-free").filter((x) => x.group === "Exits")).toHaveLength(EXIT_LIMITS.length);
+    expect(defsForBook("claude-free").filter((x) => x.group === "Exits")).toHaveLength(EXIT_LIMITS.length + 1); // + target_r (CLAUDE_EXTRA_LIMITS)
     expect(defsForBook("free").some((x) => x.group === "Exits")).toBe(false);
   });
 
@@ -351,7 +354,7 @@ describe("exit settings", () => {
 describe("check settings (bear case, trade memory, sentiment)", () => {
   it("has the contract's defaults and bounds (docs/SETTINGS_CONTRACT.md, Checks)", () => {
     expect(Object.fromEntries(CHECK_LIMITS.map((x) => [x.key, x.def]))).toEqual({
-      bear_mode: "warn", bear_block_conf: 70, bear_model: "haiku", memory_trades: 5, sentiment: "off", w_sentiment: 10,
+      bear_mode: "warn", bear_block_conf: 70, bear_model: "haiku", memory_trades: 0, sentiment: "off", w_sentiment: 10,
     });
     const d = (k: string) => CLAUDE_LIMITS.find((x) => x.key === k)!;
     expect(d("bear_mode").options).toEqual(["off", "warn", "block"]);
@@ -395,5 +398,62 @@ describe("check settings (bear case, trade memory, sentiment)", () => {
     expect(validateLimits(CLAUDE_LIMITS, { sentiment: "reddit" }).ok).toBe(false);
     expect(validateLimits(CLAUDE_LIMITS, { bear_model: "gpt" }).ok).toBe(false);
     expect(ok(validateLimits(CLAUDE_LIMITS, { memory_trades: "0", bear_block_conf: "0" }))).toEqual({ memory_trades: 0, bear_block_conf: 0 });
+  });
+});
+
+describe("in-play board settings (docs/SETTINGS_CONTRACT.md, feat/intraday bin/limits.py)", () => {
+  const d = (k: string) => CLAUDE_LIMITS.find((x) => x.key === k)!;
+
+  it("has the Mac's defaults and bounds", () => {
+    const row = (k: string) => [d(k).kind, d(k).def, d(k).min, d(k).max];
+    expect(row("board")).toEqual(["bool", true, undefined, undefined]);
+    expect(row("board_top_n")).toEqual(["number", 10, 1, 30]);
+    expect(d("board_top_n").int).toBe(true);
+    expect(row("inplay_min_price")).toEqual(["number", 5, 0, 100_000]);
+    expect(row("inplay_min_change_pct")).toEqual(["number", 2, 0, 100]);
+    expect(row("inplay_min_rvol")).toEqual(["number", 1.5, 0, 100]);
+    expect(row("target_r")).toEqual(["number", 2, 0, 20]);
+    expect(row("regime_pct")).toEqual(["number", 0.3, 0, 10]);
+    expect(row("stop_max_datr")).toEqual(["number", 0.5, 0.1, 5]);
+    expect(d("board_regime")).toMatchObject({ kind: "select", def: "filter", options: ["off", "inform", "filter"] });
+    expect(d("board_setups")).toMatchObject({ kind: "words", def: "orb,hod,pullback", options: ["orb", "hod", "pullback", "reclaim", "bounce"] });
+    expect(row("max_vwap_atr")).toEqual(["number", 1.5, 0.1, 20]);
+    expect(row("max_adr_used")).toEqual(["number", 2, 0.1, 20]);
+    expect(d("memory_trades").def).toBe(0);
+    expect(d("entry_orders").def).toBe("all");
+    expect(RUNNER_LIMITS.find((x) => x.key === "news_ticker_cooldown_min")).toMatchObject({ def: 60, min: 0, max: 600, int: true });
+  });
+
+  it("the whole default form saves nothing (no default is written over the Mac's)", () => {
+    const form = Object.fromEntries(CLAUDE_LIMITS.map((x) => [x.key, x.def]));
+    const v = validateLimits(CLAUDE_LIMITS, form);
+    expect(v.ok && overridesOnly(CLAUDE_LIMITS, v.settings)).toEqual({});
+    const r = Object.fromEntries(RUNNER_LIMITS.map((x) => [x.key, x.def]));
+    const rv = validateLimits(RUNNER_LIMITS, r);
+    expect(rv.ok && overridesOnly(RUNNER_LIMITS, rv.settings)).toEqual({});
+  });
+
+  it("board_setups: any subset, stored as a comma list in the Mac's order", () => {
+    expect(ok(validateLimits(CLAUDE_LIMITS, { board_setups: "bounce, orb ,RECLAIM" }))).toEqual({ board_setups: "orb,reclaim,bounce" });
+    const v = validateLimits(CLAUDE_LIMITS, { board_setups: "pullback, hod, orb" });
+    expect(v.ok && overridesOnly(CLAUDE_LIMITS, v.settings)).toEqual({});
+    expect(validateLimits(CLAUDE_LIMITS, { board_setups: "orb, gap" }).ok).toBe(false);
+    expect(ok(validateLimits(CLAUDE_LIMITS, { board_setups: "" }))).toEqual({}); // empty = default
+  });
+
+  it("clamps and validates the other board keys", () => {
+    expect(
+      ok(validateLimits(CLAUDE_LIMITS, { board_top_n: "99", stop_max_datr: "0", target_r: "0", board_regime: "off", regime_pct: "-1", board: "off" }))
+    ).toEqual({ board_top_n: 30, stop_max_datr: 0.1, target_r: 0, board_regime: "off", regime_pct: 0, board: false });
+    expect(validateLimits(CLAUDE_LIMITS, { board_regime: "hide" }).ok).toBe(false);
+    expect(ok(validateLimits(RUNNER_LIMITS, { news_ticker_cooldown_min: "0" }))).toEqual({ news_ticker_cooldown_min: 0 });
+    expect(ok(validateLimits(RUNNER_LIMITS, { news_ticker_cooldown_min: "9999" }))).toEqual({ news_ticker_cooldown_min: 600 });
+  });
+
+  it("is a Claude-box-only group, in its own section; target_r sits with the exits", () => {
+    expect(defsForBook("free").some((x) => x.group === "In-play board")).toBe(false);
+    expect(defsForBook("claude-free").filter((x) => x.group === "In-play board")).toHaveLength(9);
+    expect(sectionOf(d("board_setups"))).toBe("In-play board");
+    expect(sectionOf(d("target_r"))).toBe("Exits");
   });
 });
