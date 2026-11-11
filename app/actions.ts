@@ -277,6 +277,9 @@ export async function runAiTrader(
     if (res.length && res.every((r) => r.note?.startsWith("Alpaca paper account not connected"))) {
       return { error: "Connect your Alpaca paper account first (card below)." };
     }
+    if (res.length && res.every((r) => r.note?.startsWith("another run for this account is in progress"))) {
+      return { error: "Another run (the scheduled one or a second click) is in progress — try again in a minute." };
+    }
     const n = (a: string) => res.reduce((k, r) => k + r.decisions.filter((d) => d.action === a).length, 0);
     const verb = mode === "dry" ? "Dry run (nothing placed)" : "Run complete";
     return { message: `${verb}: ${n("buy")} buy, ${n("sell")} sell, ${n("cancel")} cancel` };
@@ -608,8 +611,15 @@ export async function runBacktest(
     if (!v.ok) return { error: v.errors.join(" · ") };
     settings = v.settings;
   } else {
-    // Book size is the box's start_cash (what the Limits form shows when no budget is saved).
-    settings = { budget: book.start_cash, ...((book.settings as Record<string, unknown> | null) ?? {}) };
+    // Book size: the box's current size (start_cash + size changes), what the tab shows.
+    let size = book.start_cash as number;
+    try {
+      const adj = await loadAdjustments(supabase, [book.id as string]);
+      size = sizeOf({ id: book.id as string, key: box, start_cash: book.start_cash as number, settings: book.settings }, adj.list);
+    } catch (e) {
+      return { error: e instanceof Error ? e.message : String(e) };
+    }
+    settings = { ...((book.settings as Record<string, unknown> | null) ?? {}), budget: size };
   }
   const R = rulesFor(settings, box);
 

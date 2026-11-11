@@ -12,9 +12,9 @@ export interface FakeDb {
   tables: Record<string, Row[]>;
   /** "table:op" → error message (op = select | insert | upsert | update | delete); `times` how often (default always). */
   fail: Map<string, { message: string; times?: number }>;
-  rpcs: Record<string, (args: Row) => { data: unknown; error: { message: string } | null }>;
+  rpcs: Record<string, (args: Row) => { data: unknown; error: { message: string; code?: string } | null }>;
   from(table: string): FakeQuery;
-  rpc(name: string, args: Row): Promise<{ data: unknown; error: { message: string } | null }>;
+  rpc(name: string, args: Row): Promise<{ data: unknown; error: { message: string; code?: string } | null }>;
   /** Every write: [table, op, payload]. */
   writes: [string, string, unknown][];
 }
@@ -179,7 +179,8 @@ export function fakeDb(tables: Record<string, Row[]> = {}): FakeDb {
       get_alpaca_credentials: () => ({ data: { key_id: "PKTEST", secret: "s" }, error: null }),
     },
     from: (table) => new FakeQuery(db, table),
-    rpc: async (name, args) => db.rpcs[name]?.(args) ?? { data: null, error: { message: `no rpc ${name}` } },
+    rpc: async (name, args) =>
+      db.rpcs[name]?.(args) ?? { data: null, error: { message: `Could not find the function public.${name} in the schema cache`, code: "PGRST202" } },
   };
   return db;
 }

@@ -916,7 +916,10 @@ export async function takeRunLock(
   const runId = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
   const { data, error } = await admin.rpc("try_lock_ai_run", { p_user: userId, p_run: runId, p_ttl_sec: RUN_LOCK_TTL_S });
   if (error) {
-    if (/try_lock_ai_run|function|schema cache/i.test(error.message)) return { ok: true, note: "(run lock not installed — supabase/ai_run_lock.sql)" };
+    // Only "the function isn't there" (SQL not applied) runs unlocked; anything else fails the run.
+    if (error.code === "PGRST202" || error.code === "42883" || /could not find the function|schema cache/i.test(error.message)) {
+      return { ok: true, note: "(run lock not installed — supabase/ai_run_lock.sql)" };
+    }
     throw new Error(`run lock: ${error.message}`);
   }
   return data === true ? { ok: true, runId, note: null } : { ok: false };
