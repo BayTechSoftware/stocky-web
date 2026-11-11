@@ -458,6 +458,18 @@ async function recordSizeChange(
     .select("id")
     .maybeSingle();
   if (error) return { error: `Couldn't record the size change: ${error.message}` };
+  // Today's equity snapshot (if any) predates the change: shift it too, so tomorrow's daily-loss halt
+  // compares like with like (the halt adds only adjustments made after the snapshot's day).
+  const today = etDate(new Date());
+  const { data: snap, error: snapErr } = await admin.from("ai_equity").select("equity, cash").eq("book_id", book.id).eq("as_of", today).maybeSingle();
+  if (!snapErr && snap) {
+    const { error: upErr } = await admin
+      .from("ai_equity")
+      .update({ equity: Number(snap.equity) + amount, cash: Number(snap.cash) + amount })
+      .eq("book_id", book.id)
+      .eq("as_of", today);
+    if (upErr) console.error(`ai_equity shift (${book.id}): ${upErr.message}`);
+  } else if (snapErr) console.error(`ai_equity read (${book.id}): ${snapErr.message}`);
   return { adjustmentId: (data?.id as string | undefined) ?? null };
 }
 
@@ -534,13 +546,16 @@ export async function syncLive(): Promise<{ ok: true } | { error: string }> {
       .maybeSingle();
     if (lfErr) return { error: `ai_fills: ${lfErr.message}` };
     const win = syncWindow(since, (lastFill?.transacted_at as string | undefined) ?? null, known);
-    const [remote, fills] = await Promise.all([listOrders(creds, win.ordersAfter), listFills(creds, win.fillsAfter)]);
-    const plan = planLiveSync(
-      known,
-      remote,
-      fills,
-      new Map(books.map((b) => [b.key as string, b.id as string]))
-    );
+    const [firstRemote, fills] = await Promise.all([listOrders(creds, win.ordersAfter), listFills(creds, win.fillsAfter)]);
+    let remote = firstRemote;
+    const byKey = new Map(books.map((b) => [b.key as string, b.id as string]));
+    let plan = planLiveSync(known, remote, fills, byKey);
+    // A fill no order explains (a leg replaced elsewhere, an order older than the window): read every
+    // order once so it's attributed now — otherwise it would fall behind the cursor and never be read again.
+    if (plan.fillRows.length < fills.length && win.ordersAfter > since) {
+      remote = await listOrders(creds, since);
+      plan = planLiveSync(known, remote, fills, byKey);
+    }
     for (const r of await Promise.all(plan.updates.map((u) => admin.from("ai_orders").update(u.patch).eq("id", u.id)))) {
       must("ai_orders update", r);
     }

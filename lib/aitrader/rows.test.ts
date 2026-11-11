@@ -43,3 +43,13 @@ describe("loadAllRows", () => {
     expect(seen).toEqual(["created_at", "id"]);
   });
 });
+
+describe("loadAllRows dedupe", () => {
+  it("keeps a row repeated across pages once (a concurrent insert shifted the offsets)", async () => {
+    const pages = [[{ k: "a" }, { k: "b" }], [{ k: "b" }, { k: "c" }], []];
+    let i = 0;
+    const make = () => ({ range: () => Promise.resolve({ data: pages[i++], error: null }) });
+    const rows = await loadAllRows<{ k: string }>("t", make, 2, "k");
+    expect(rows.map((r) => r.k)).toEqual(["a", "b", "c"]);
+  });
+});
