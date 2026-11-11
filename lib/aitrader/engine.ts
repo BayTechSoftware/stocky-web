@@ -254,7 +254,19 @@ export async function runAiTrader(opts: { admin: Admin; mode: RunMode; userId?: 
         out.push(...skip("Alpaca paper account not connected — skipped"));
         continue;
       }
-      out.push(...(await runForUser(admin, mode, books, creds)));
+      // One run per user at a time (supabase/ai_run_lock.sql); a dry run places nothing, so it never waits.
+      const lock = mode === "dry" ? { ok: true as const, note: null } : await takeRunLock(admin, userId);
+      if (!lock.ok) {
+        out.push(...skip("another run for this account is in progress — skipped"));
+        continue;
+      }
+      try {
+        const res = await runForUser(admin, mode, books, creds);
+        if (lock.note) for (const r of res) r.note = [r.note, lock.note].filter(Boolean).join(" ");
+        out.push(...res);
+      } finally {
+        if (lock.runId) await releaseRunLock(admin, userId, lock.runId);
+      }
     } catch (e) {
       // A failure before the per-book loop (keys, clock, ledger reads): leave a trace on every book.
       const msg = e instanceof Error ? e.message : String(e);
@@ -474,7 +486,11 @@ async function runForUser(admin: Admin, mode: RunMode, books: BookRow[], creds: 
         return await fn();
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
-        decisions.push({ symbol, action: "skip", reason: `rejected by Alpaca: ${msg}` });
+        decisions.push({
+          symbol,
+          action: "skip",
+          reason: isDuplicateClientId(msg) ? `already placed today (another run) — Alpaca rejected the duplicate: ${msg}` : `rejected by Alpaca: ${msg}`,
+        });
         return undefined;
       }
     }
@@ -571,7 +587,7 @@ async function runForUser(admin: Admin, mode: RunMode, books: BookRow[], creds: 
           }
           const { br, qty } = plan;
           if (!dry) {
-            const clientId = `stk-${b.key}-e-${c.symbol}-${now.getTime()}`;
+            const clientId = clientOrderId(b.key, "e", c.symbol, today);
             const o = await attempt(c.symbol, () => A.submitOrder(creds, entryOrderBody(c.symbol, qty, br, clientId)));
             if (!o) continue;
             const error = await recordOrder(admin, {
@@ -754,7 +770,7 @@ async function runForUser(admin: Admin, mode: RunMode, books: BookRow[], creds: 
       ? `no working stop and the price ${px!.toFixed(2)} is at/below the ${stop.toFixed(2)} stop — selling`
       : `no working stop on record — placed a GTC stop at ${stop.toFixed(2)}`;
     if (mode !== "dry") {
-      const clientId = `stk-${b.key}-s-${symbol}-${now.getTime()}`;
+      const clientId = clientOrderId(b.key, "s", symbol, today);
       const body = crossed
         ? { symbol, qty: String(qty), side: "sell", type: "market", time_in_force: "day", client_order_id: clientId }
         : { symbol, qty: String(qty), side: "sell", type: "stop", stop_price: stop.toFixed(2), time_in_force: "gtc", client_order_id: clientId };
@@ -805,7 +821,7 @@ async function runForUser(admin: Admin, mode: RunMode, books: BookRow[], creds: 
       if (states.every((s) => !LIVE.has(s) && s !== "pending_cancel")) break;
       await sleep(500);
     }
-    const clientId = `stk-${b.key}-x-${symbol}-${now.getTime()}`;
+    const clientId = clientOrderId(b.key, "x", symbol, today);
     let o: A.Order;
     try {
       o = await A.submitOrder(creds, {
@@ -827,6 +843,43 @@ async function runForUser(admin: Admin, mode: RunMode, books: BookRow[], creds: 
 }
 
 const LIVE = new Set([...OPEN, "pending_replace"]);
+
+/** How long a run may hold the per-user lock (longer than any function timeout). */
+export const RUN_LOCK_TTL_S = 300;
+
+/**
+ * Take the per-user run lock. Before supabase/ai_run_lock.sql is applied the RPC is missing:
+ * run unlocked (today's behaviour) and say so. Any other error fails the run (never run twice blindly).
+ */
+export async function takeRunLock(
+  admin: Admin,
+  userId: string
+): Promise<{ ok: true; runId?: string; note: string | null } | { ok: false }> {
+  const runId = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  const { data, error } = await admin.rpc("try_lock_ai_run", { p_user: userId, p_run: runId, p_ttl_sec: RUN_LOCK_TTL_S });
+  if (error) {
+    if (/try_lock_ai_run|function|schema cache/i.test(error.message)) return { ok: true, note: "(run lock not installed — supabase/ai_run_lock.sql)" };
+    throw new Error(`run lock: ${error.message}`);
+  }
+  return data === true ? { ok: true, runId, note: null } : { ok: false };
+}
+
+async function releaseRunLock(admin: Admin, userId: string, runId: string) {
+  const { error } = await admin.rpc("release_ai_run", { p_user: userId, p_run: runId });
+  if (error) console.error(`release_ai_run (${userId}): ${error.message}`); // it expires on its own
+}
+
+/**
+ * The client order id of a Rules order: one per book + kind + symbol + NY date, so a second run
+ * (or a retry) placing the same order the same day is rejected by Alpaca as a duplicate.
+ * kind: e = entry, s = protective stop (or a market sell when the stop is crossed), x = rule exit.
+ */
+export function clientOrderId(book: string, kind: "e" | "s" | "x", symbol: string, nyDate: string): string {
+  return `stk-${book}-${kind}-${symbol}-${nyDate}`;
+}
+
+/** Alpaca's answer to a reused client_order_id. */
+export const isDuplicateClientId = (msg: string) => /client_order_id/i.test(msg) && /unique|exists|duplicate/i.test(msg);
 
 /** Insert an ai_orders row, retried (3 tries); returns the last error message, or null once recorded. */
 export async function recordOrder(admin: Admin, row: Record<string, unknown>, tries = 3): Promise<string | null> {

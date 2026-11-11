@@ -94,3 +94,52 @@ describe("engine harness: failed exit keeps a stop (fix #5)", () => {
     expect(r.decisions.some((d) => /placed a GTC stop/.test(d.reason))).toBe(true);
   });
 });
+
+const MYLIST = { id: "book-my", user_id: U, key: "mylist", name: "My List", start_cash: 5000, created_at: "2026-10-01T00:00:00Z", settings: {} };
+/** A My List book with one fresh BUY signal on AAPL (and bars), so a run wants to enter it. */
+function entryWorld(settings: Record<string, unknown> = {}): FakeDb {
+  alp.bars.AAPL = dailyBars(80, 100);
+  return fakeDb({
+    ai_books: [{ ...MYLIST, settings }],
+    ai_orders: [], ai_fills: [], ai_equity: [], ai_runs: [],
+    watchlist: [{ user_id: U, symbol: "AAPL" }],
+    symbol_signals: [{ symbol: "AAPL", assessment: "BUY", tag: "SWEET", score: 80, updated_at: "2026-11-11T22:05:00Z" }],
+  });
+}
+
+describe("engine harness: concurrent runs (fix #6)", () => {
+  it("entry client ids are deterministic per book + kind + symbol + NY date", async () => {
+    const db = entryWorld();
+    const [r] = await run(db);
+    expect(r.error).toBeUndefined();
+    expect(alp.submitted.map((b) => b.client_order_id)).toEqual(["stk-mylist-e-AAPL-2026-11-11"]);
+    expect(r.note).toMatch(/run lock not installed/);
+  });
+
+  it("a second run the same day can't place the same entry twice", async () => {
+    const db = entryWorld();
+    await run(db);
+    db.tables.ai_orders = []; // as if the first run's insert was lost
+    alp.orders = [];
+    const [r2] = await run(db);
+    expect(alp.submitted.length).toBe(1);
+    expect(r2.decisions.some((d) => /already placed today/.test(d.reason))).toBe(true);
+  });
+
+  it("skips the user while another run holds the lock", async () => {
+    const db = entryWorld();
+    db.rpcs.try_lock_ai_run = () => ({ data: false, error: null });
+    const [r] = await run(db);
+    expect(r.note).toMatch(/another run .* in progress/);
+    expect(alp.submitted).toEqual([]);
+  });
+
+  it("takes and releases the lock around the run", async () => {
+    const db = entryWorld();
+    const calls: string[] = [];
+    db.rpcs.try_lock_ai_run = () => (calls.push("lock"), { data: true, error: null });
+    db.rpcs.release_ai_run = () => (calls.push("release"), { data: null, error: null });
+    await run(db);
+    expect(calls).toEqual(["lock", "release"]);
+  });
+});
