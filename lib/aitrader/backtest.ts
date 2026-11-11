@@ -19,6 +19,10 @@
  * My List signals are recomputed per day from the closes (lib/signals.ts, the
  * same 252-close window the refresh job uses); Free Choice uses setups.ts on the
  * same 420-calendar-day window the engine loads. Whole shares, no commissions.
+ *
+ * Only the evening run is simulated: new trades are opened after the close, which is the engine with
+ * midday_entries off — so midday_entries doesn't change a backtest (with it on, the live engine can
+ * also enter during the session). reentry_cooldown_days is applied like the engine.
  */
 import type { Bar } from "../alpaca";
 import { assess } from "../signals";
@@ -34,6 +38,7 @@ import {
   keepLegReason,
   mylistCandidates,
   planEntry,
+  reentrySkip,
   type SignalLite,
   type StaleSignal,
 } from "./decide";
@@ -229,6 +234,8 @@ export function runBacktest(input: BacktestInput): BacktestResult {
   const positions = new Map<string, Pos>();
   let working: Working[] = [];
   const closed: BacktestTrade[] = [];
+  /** Closed trades as the re-entry cooldown reads them (exit at the session's open/stop time). */
+  const cooldownLog: { symbol: string; closedAt: string }[] = [];
   const equity: BacktestResult["equity"] = [];
   let prevEquity: number | null = null;
   let haltedDays = 0;
@@ -283,6 +290,7 @@ export function runBacktest(input: BacktestInput): BacktestResult {
         pnl: round2(pnl), pnlPct: (exit / p.fill - 1) * 100, why, setup: p.setup,
       });
       positions.delete(p.symbol);
+      cooldownLog.push({ symbol: p.symbol, closedAt: fillTime(D) });
     };
 
     /* ---- 1. the session of D ---- */
@@ -365,6 +373,7 @@ export function runBacktest(input: BacktestInput): BacktestResult {
       for (const c of cands) {
         if (placed >= wantN) break;
         if (occupied.has(c.symbol)) continue;
+        if (reentrySkip(c.symbol, cooldownLog, D, R)) continue;
         const bars = barsOf(c.symbol);
         const plan = planEntry(c, bars, closeOf(c.symbol), R, eq, available);
         if (!plan.ok) continue;

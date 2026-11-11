@@ -143,3 +143,37 @@ describe("engine harness: concurrent runs (fix #6)", () => {
     expect(calls).toEqual(["lock", "release"]);
   });
 });
+
+describe("engine harness: midday entries + re-entry cooldown (fix #8)", () => {
+  it("defaults keep today's behaviour: a run during market hours may enter", async () => {
+    alp.clock = { ...alp.clock, is_open: true, timestamp: "2026-11-11T15:00:00Z" };
+    alp.latest = { AAPL: 100 };
+    const db = entryWorld();
+    db.tables.symbol_signals[0].updated_at = "2026-11-10T22:05:00Z";
+    await run(db);
+    expect(alp.submitted.length).toBe(1);
+  });
+
+  it("midday_entries off: no new trades while the market is open", async () => {
+    alp.clock = { ...alp.clock, is_open: true, timestamp: "2026-11-11T15:00:00Z" };
+    alp.latest = { AAPL: 100 };
+    const db = entryWorld({ midday_entries: false });
+    db.tables.symbol_signals[0].updated_at = "2026-11-10T22:05:00Z";
+    const [r] = await run(db);
+    expect(alp.submitted).toEqual([]);
+    expect(r.decisions[0].reason).toMatch(/during market hours/);
+  });
+
+  it("reentry_cooldown_days 1: no same-day re-entry after a stop", async () => {
+    const db = entryWorld({ reentry_cooldown_days: 1 });
+    // Bought and stopped out today.
+    db.tables.ai_orders.push({ id: "e", book_id: "book-my", symbol: "AAPL", side: "buy", kind: "entry", qty: 1, alpaca_order_id: "pe", leg_ids: ["ps"], status: "filled", filled_qty: 1, filled_avg: 100, created_at: "2026-11-10T22:30:00Z" });
+    db.tables.ai_fills.push(
+      { activity_id: "a1", book_id: "book-my", order_id: "pe", symbol: "AAPL", side: "buy", qty: 1, price: 100, transacted_at: "2026-11-11T14:31:00Z" },
+      { activity_id: "a2", book_id: "book-my", order_id: "ps", symbol: "AAPL", side: "sell", qty: 1, price: 94, transacted_at: "2026-11-11T18:00:00Z" }
+    );
+    const [r] = await run(db);
+    expect(alp.submitted).toEqual([]);
+    expect(r.decisions.some((d) => /waiting 1 day before re-entering/.test(d.reason))).toBe(true);
+  });
+});

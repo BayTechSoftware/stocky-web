@@ -154,6 +154,25 @@ export function haltReason(equity: number, prev: number | null | undefined, R: R
   return undefined;
 }
 
+/** Why a run during market hours opens nothing new (midday_entries off), or undefined. */
+export function middaySkip(R: Rules, marketOpen: boolean): string | undefined {
+  return marketOpen && !R.middayEntries ? "no new trades in runs during market hours (setting) — the evening run opens them" : undefined;
+}
+
+/**
+ * Why `symbol` can't be re-entered yet (reentry_cooldown_days), or undefined. Days are NY calendar
+ * dates since the last closed trade in it: 1 blocks only the same day.
+ */
+export function reentrySkip(symbol: string, closed: { symbol: string; closedAt: string }[], today: string, R: Rules): string | undefined {
+  if (R.reentryCooldownDays <= 0) return undefined;
+  const last = closed.filter((c) => c.symbol === symbol).reduce((m, c) => (c.closedAt > m ? c.closedAt : m), "");
+  if (!last) return undefined;
+  const days = Math.round((Date.parse(today) - Date.parse(etDate(new Date(last)))) / 86_400_000);
+  return days < R.reentryCooldownDays
+    ? `closed a trade in it ${days === 0 ? "today" : `${days} day${days === 1 ? "" : "s"} ago`} — waiting ${R.reentryCooldownDays} day${R.reentryCooldownDays === 1 ? "" : "s"} before re-entering`
+    : undefined;
+}
+
 /** How many new entries this run may place given the occupied slots (positions + working entries). */
 export function entrySlots(R: Rules, occupied: number): { wantN: number; skip?: string } {
   const wantN = Math.max(0, Math.min(R.maxPositions - occupied, R.maxNewPerRun));

@@ -49,7 +49,7 @@ describe("contract tables", () => {
         "budget", "risk_pct", "max_position_pct", "cash_buffer_pct", "max_positions", "max_new_per_run",
         "daily_loss_halt_pct", "reward_risk", "atr_mult", "min_stop_pct", "max_stop_pct", "entry_slip_pct",
         "entry_valid_days", "min_price", "min_score", "max_signal_age_days", "enter_on_watch", "exit_on_overbought", "max_hold_days",
-        "max_rsi", "uptrend_only", "universe_add", "universe_remove",
+        "max_rsi", "uptrend_only", "universe_add", "universe_remove", "midday_entries", "reentry_cooldown_days",
       ].sort()
     );
   });

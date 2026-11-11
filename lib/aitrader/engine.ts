@@ -34,8 +34,10 @@ import {
   freeCandidates,
   haltReason,
   keepLegReason,
+  middaySkip,
   mylistCandidates,
   planEntry,
+  reentrySkip,
   shortBlockedSymbols,
   shortConflict,
   shortLookupSkip,
@@ -569,7 +571,10 @@ async function runForUser(admin: Admin, mode: RunMode, books: BookRow[], creds: 
 
       /* f) new entries */
       const lookupSkip = shortLookupSkip(shorts);
-      if (!halted && lookupSkip) {
+      const midday = middaySkip(R, clock.is_open);
+      if (!halted && midday) {
+        decisions.push({ symbol: "—", action: "skip", reason: midday });
+      } else if (!halted && lookupSkip) {
         decisions.push({ symbol: "—", action: "skip", reason: lookupSkip });
         notes.push(lookupSkip);
       } else if (!halted) {
@@ -589,6 +594,11 @@ async function runForUser(admin: Admin, mode: RunMode, books: BookRow[], creds: 
         for (const c of cands) {
           if (placed >= wantN) break;
           if (occupied.has(c.symbol)) continue;
+          const cooling = reentrySkip(c.symbol, st.closed, today, R);
+          if (cooling) {
+            decisions.push({ symbol: c.symbol, action: "skip", reason: cooling });
+            continue;
+          }
           const conflict = shortConflict(c.symbol, shorts);
           if (conflict) {
             decisions.push({ symbol: c.symbol, action: "skip", reason: conflict });

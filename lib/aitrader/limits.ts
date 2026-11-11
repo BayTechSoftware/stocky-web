@@ -62,6 +62,8 @@ export const RULES_LIMITS: LimitDef[] = [
   { key: "entry_valid_days", group: "Entries & exits", label: "Unfilled entries kept for", unit: "days", kind: "number", min: 1, max: 60, int: true, def: 1, hint: "then the unfilled part is cancelled" },
   { key: "max_hold_days", group: "Entries & exits", label: "Max holding period", unit: "days", kind: "number", min: 0, max: 3650, int: true, def: 21, defBy: { mylist: 0, free: 21 }, hint: "calendar days; 0 = off" },
   { key: "exit_on_overbought", group: "Entries & exits", label: "Sell when the signal turns OVERBOUGHT", kind: "bool", def: true, only: "mylist" },
+  { key: "midday_entries", group: "Entries & exits", label: "Open new trades in runs during market hours", kind: "bool", def: true, hint: "the midday run (and Run now while the market is open); off = only the evening run opens trades, midday still manages stops and exits" },
+  { key: "reentry_cooldown_days", group: "Entries & exits", label: "Wait before re-entering a stock", unit: "days", kind: "number", min: 0, max: 30, int: true, def: 0, hint: "after a trade in it closed; 1 = not the same day; 0 = off" },
   // Strategy
   { key: "min_price", group: "Strategy", label: "Min share price", unit: "$", kind: "number", min: 0, max: 100_000, def: 10 },
   { key: "min_score", group: "Strategy", label: "Min Stocky signal score", unit: "", kind: "number", min: 0, max: 100, def: 60, only: "mylist" },
