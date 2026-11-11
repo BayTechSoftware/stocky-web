@@ -62,3 +62,35 @@ describe("engine harness: unrecorded orders (fix #4)", () => {
     expect(db.tables.ai_orders).toEqual([]);
   });
 });
+
+describe("engine harness: failed exit keeps a stop (fix #5)", () => {
+  it("re-checks the cancelled legs and places a stop when the sell is rejected", async () => {
+    const db = world();
+    db.tables.ai_books[0].settings = { max_new_per_run: 0, max_hold_days: 5 };
+    const parent = fakeOrder({
+      id: "p1", symbol: "AAPL", side: "buy", qty: "10", filled_qty: "10", filled_avg_price: "100", status: "filled",
+      client_order_id: "stk-free-e-AAPL-2026-10-20", order_class: "bracket", created_at: "2026-10-20T22:30:00Z",
+      legs: [
+        fakeOrder({ id: "ls", symbol: "AAPL", side: "sell", type: "stop", stop_price: "94", status: "new" }),
+        fakeOrder({ id: "lt", symbol: "AAPL", side: "sell", type: "limit", limit_price: "112", status: "new" }),
+      ],
+    });
+    alp.orders.push(parent);
+    db.tables.ai_orders.push({
+      id: "o1", book_id: "book-free", symbol: "AAPL", side: "buy", kind: "entry", qty: 10, limit_price: 101, stop_price: null,
+      target_price: null, leg_ids: ["ls", "lt"], alpaca_order_id: "p1", client_order_id: parent.client_order_id, status: "filled",
+      filled_qty: 10, filled_avg: 100, created_at: "2026-10-20T22:30:00Z",
+    });
+    alp.fills.push({ id: "f1", order_id: "p1", symbol: "AAPL", side: "buy", qty: "10", price: "100", transaction_time: "2026-10-21T14:31:00Z" });
+    alp.bars.AAPL = dailyBars(80, 100);
+    alp.rejectSubmit = (b) => (b.type === "market" ? "Alpaca 403: market closed" : null);
+
+    const [r] = await run(db);
+    expect(alp.cancelled.sort()).toEqual(["ls", "lt"]);
+    const stops = alp.submitted.filter((b) => b.type === "stop");
+    expect(stops.length).toBe(1);
+    expect(stops[0].qty).toBe("10");
+    expect(r.decisions.some((d) => /rejected by Alpaca: Alpaca 403/.test(d.reason))).toBe(true);
+    expect(r.decisions.some((d) => /placed a GTC stop/.test(d.reason))).toBe(true);
+  });
+});

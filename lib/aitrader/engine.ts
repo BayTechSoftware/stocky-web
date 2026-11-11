@@ -788,15 +788,35 @@ async function runForUser(admin: Admin, mode: RunMode, books: BookRow[], creds: 
         .map((o) => o.alpaca_order_id!),
     ].filter((id) => LIVE.has(remoteById.get(id)?.status ?? ""));
     for (const id of ids) await A.cancelOrder(creds, id).catch(() => undefined);
+    // Poll the legs and write what we see back into the cache, so a later stop check reads the truth.
+    const poll = (id: string) =>
+      A.getOrder(creds, id).then(
+        (o) => {
+          remoteById.set(id, o);
+          return o.status;
+        },
+        () => {
+          remoteById.delete(id); // unknown now: stopIsLive() re-reads it
+          return "unknown";
+        }
+      );
     for (let i = 0; i < 6 && ids.length; i++) {
-      const states = await Promise.all(ids.map((id) => A.getOrder(creds, id).then((o) => o.status).catch(() => "canceled")));
+      const states = await Promise.all(ids.map(poll));
       if (states.every((s) => !LIVE.has(s) && s !== "pending_cancel")) break;
       await sleep(500);
     }
     const clientId = `stk-${b.key}-x-${symbol}-${now.getTime()}`;
-    const o = await A.submitOrder(creds, {
-      symbol, qty: String(qty), side: "sell", type: "market", time_in_force: "day", client_order_id: clientId,
-    });
+    let o: A.Order;
+    try {
+      o = await A.submitOrder(creds, {
+        symbol, qty: String(qty), side: "sell", type: "market", time_in_force: "day", client_order_id: clientId,
+      });
+    } catch (e) {
+      // The sell failed after the stop legs were cancelled: re-read them so the stop check that follows
+      // (runBook step e) sees fresh states and places a stop if none is left.
+      await Promise.all(ids.map(poll));
+      throw e;
+    }
     const recErr = await recordOrder(admin, {
       book_id: b.id, symbol, side: "sell", kind: "exit", qty, reason: why,
       alpaca_order_id: o.id, client_order_id: clientId, status: o.status,
