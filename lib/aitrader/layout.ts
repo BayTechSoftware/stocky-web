@@ -101,7 +101,7 @@ export function sortDefs(defs: LimitDef[]): LimitDef[] {
 const ADVANCED = new Set([
   "earnings_window_days", "max_vwap_atr", "max_adr_used", "extension_penalty",
   "max_orders_per_day", "max_order_usd", "min_order_usd", "fractional", "pdt_guard", "min_stop_pct", "min_stop_atr",
-  "or_minutes", "max_breakout_age_min", "inplay_min_price", "regime_pct", "stop_max_datr",
+  "or_minutes", "max_breakout_age_min", "inplay_min_price", "regime_pct", "stop_max_datr", "board_wakes_per_symbol", "board_rewake_datr",
   "flatten_lead_min", "run_timeout_s", "news_tags", "wake_min_gap_min",
 ]);
 
@@ -145,6 +145,8 @@ const SHOW_IF: Record<string, (v: Record<string, string>) => boolean> = {
   regime_pct: (v) => on(v.board) && v.board_regime !== "off",
   board_setups: (v) => on(v.board),
   stop_max_datr: (v) => on(v.board),
+  board_wakes_per_symbol: (v) => on(v.board),
+  board_rewake_datr: (v) => on(v.board),
   news_tags: (v) => on(v.news_wake),
 };
 

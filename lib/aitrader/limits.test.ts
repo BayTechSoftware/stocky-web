@@ -42,7 +42,7 @@ describe("contract tables", () => {
         "market_read", "flatten_backup", "entry_orders", "bear_fail_closed", "min_stop_atr", "max_breakout_age_min",
         "lesson_min_trades", "enabled",
         "board", "board_top_n", "inplay_min_price", "inplay_min_change_pct", "inplay_min_rvol", "target_r",
-        "board_regime", "regime_pct", "board_setups", "stop_max_datr",
+        "board_regime", "regime_pct", "board_setups", "stop_max_datr", "board_wakes_per_symbol", "board_rewake_datr",
       ].sort()
     );
     expect(keys(RUNNER_LIMITS)).toEqual(
@@ -415,6 +415,9 @@ describe("in-play board settings (docs/SETTINGS_CONTRACT.md, feat/intraday bin/l
     expect(row("target_r")).toEqual(["number", 2, 0, 20]);
     expect(row("regime_pct")).toEqual(["number", 0.3, 0, 10]);
     expect(row("stop_max_datr")).toEqual(["number", 0.5, 0.1, 5]);
+    expect(row("board_wakes_per_symbol")).toEqual(["number", 3, 0, 100]);
+    expect(d("board_wakes_per_symbol").int).toBe(true);
+    expect(row("board_rewake_datr")).toEqual(["number", 0.25, 0, 10]);
     expect(d("board_regime")).toMatchObject({ kind: "select", def: "filter", options: ["off", "inform", "filter"] });
     expect(d("board_setups")).toMatchObject({ kind: "words", def: "orb,hod,pullback", options: ["orb", "hod", "pullback", "reclaim", "bounce"] });
     expect(row("max_vwap_atr")).toEqual(["number", 1.5, 0.1, 20]);
@@ -452,7 +455,7 @@ describe("in-play board settings (docs/SETTINGS_CONTRACT.md, feat/intraday bin/l
 
   it("is a Claude-box-only group, in its own section; target_r sits with the exits", () => {
     expect(defsForBook("free").some((x) => x.group === "In-play board")).toBe(false);
-    expect(defsForBook("claude-free").filter((x) => x.group === "In-play board")).toHaveLength(9);
+    expect(defsForBook("claude-free").filter((x) => x.group === "In-play board")).toHaveLength(11);
     expect(sectionOf(d("board_setups"))).toBe("In-play board");
     expect(sectionOf(d("target_r"))).toBe("Exits");
   });
