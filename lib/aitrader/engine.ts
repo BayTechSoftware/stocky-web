@@ -33,6 +33,7 @@ import {
   etDate,
   exitReason,
   freeCandidates,
+  gapDownReason,
   haltReason,
   keepLegReason,
   middaySkip,
@@ -417,10 +418,12 @@ async function runForUser(admin: Admin, mode: RunMode, books: BookRow[], creds: 
   const symbols = Array.from(wanted);
 
   const barsBy = await A.getDailyBars(creds, symbols, etDate(new Date(now.getTime() - HISTORY_DAYS * 86_400_000)));
+  /** Today's forming bar during the session (its open is known): for max_gap_down_pct. */
+  const todayOpen = new Map<string, number>();
   if (clock.is_open) {
     // Today's daily bar is still forming — use completed sessions for signals.
-    for (const bars of Object.values(barsBy)) {
-      if (bars.length && etDate(new Date(bars[bars.length - 1].t)) === today) bars.pop();
+    for (const [sym, bars] of Object.entries(barsBy)) {
+      if (bars.length && etDate(new Date(bars[bars.length - 1].t)) === today) todayOpen.set(sym, bars.pop()!.o);
     }
   }
   const live = clock.is_open ? await A.getLatestPrices(creds, symbols) : {};
@@ -523,6 +526,20 @@ async function runForUser(admin: Admin, mode: RunMode, books: BookRow[], creds: 
       let working = orders.filter((o) => o.kind === "entry" && OPEN.has(o.status));
       const cancelledPartials: OrderRow[] = [];
       for (const p of working) {
+        // During the session: a resting entry in a stock that gapped down too far is cancelled (max_gap_down_pct).
+        const bars = barsBy[p.symbol];
+        const gapped = clock.is_open ? gapDownReason(todayOpen.get(p.symbol), bars?.[bars.length - 1]?.c, R) : undefined;
+        if (gapped && p.alpaca_order_id && !p.filled_qty) {
+          if (!dry) {
+            const ok = await attempt(p.symbol, () => A.cancelOrder(creds, p.alpaca_order_id!).then(() => true));
+            if (!ok) continue;
+            const { error: gErr } = await admin.from("ai_orders").update({ status: "canceled" }).eq("id", p.id);
+            if (gErr) notes.push(`${p.symbol}: cancelled at Alpaca but not recorded (${gErr.message}) — the next sync fixes it.`);
+            p.status = "canceled";
+          }
+          decisions.push({ symbol: p.symbol, action: "cancel", reason: `resting entry cancelled: ${gapped}` });
+          continue;
+        }
         if (!p.alpaca_order_id || !isStaleEntry(p.created_at, now, R, sessions)) continue;
         const ageH = Math.round((now.getTime() - new Date(p.created_at).getTime()) / 3_600_000);
         const sess = `${R.entryValidDays} trading session${R.entryValidDays === 1 ? "" : "s"}`;
@@ -613,7 +630,13 @@ async function runForUser(admin: Admin, mode: RunMode, books: BookRow[], creds: 
             continue;
           }
           const ref = priceOf(c.symbol);
-          const plan = planEntry(c, barsBy[c.symbol], ref, R, equity, available);
+          const cBars = barsBy[c.symbol];
+          const gapToday = clock.is_open ? gapDownReason(todayOpen.get(c.symbol), cBars?.[cBars.length - 1]?.c, R) : undefined;
+          if (gapToday) {
+            decisions.push({ symbol: c.symbol, action: "skip", reason: `${c.reason} — ${gapToday}` });
+            continue;
+          }
+          const plan = planEntry(c, cBars, ref, R, equity, available);
           if (!plan.ok) {
             decisions.push({ symbol: c.symbol, action: "skip", reason: plan.reason });
             continue;

@@ -71,6 +71,8 @@ export const RULES_LIMITS: LimitDef[] = [
   { key: "enter_on_watch", group: "Strategy", label: "Also enter on WATCH signals", kind: "bool", def: false, only: "mylist" },
   { key: "max_rsi", group: "Strategy", label: "Skip setups with RSI(14) at or above", unit: "", kind: "number", min: 0, max: 100, def: 75, only: "free", hint: "100 = never skip" },
   { key: "uptrend_only", group: "Strategy", label: "Uptrend filter (50/200-day average)", kind: "bool", def: true, only: "free" },
+  { key: "max_gap_down_pct", group: "Strategy", label: "Skip after a gap down of more than", unit: "%", kind: "number", min: 0, max: 50, def: 0, hint: "open vs the previous close: no new entry after such a day, and a resting entry is cancelled at the next run during the session (it can still fill at the open itself, before that run); 0 = off" },
+  { key: "min_atr_pct", group: "Strategy", label: "Skip stocks that move less than", unit: "%", kind: "number", min: 0, max: 50, def: 0, hint: "ATR(14) as % of the price — e.g. income ETFs like QYLD, JEPI; 0 = off" },
   // Universe
   { key: "universe_add", group: "Universe", label: "Add to the universe", kind: "symbols", def: "", only: "free", hint: "comma-separated tickers" },
   { key: "universe_remove", group: "Universe", label: "Remove from the universe", kind: "symbols", def: "", only: "free", hint: "comma-separated tickers" },

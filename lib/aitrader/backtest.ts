@@ -37,6 +37,7 @@ import {
   haltReason,
   keepLegReason,
   mylistCandidates,
+  gapDownReason,
   planEntry,
   reentrySkip,
   type SignalLite,
@@ -256,6 +257,13 @@ export function runBacktest(input: BacktestInput): BacktestResult {
       const s = series.get(sym);
       return s && s.hi >= 0 && s.dates[s.hi] === D ? s.bars[s.hi] : undefined;
     };
+    /** The close before today's bar (the previous session's). */
+    const prevCloseOf = (sym: string): number | null => {
+      const s = series.get(sym);
+      if (!s || s.hi < 0) return null;
+      const i = s.dates[s.hi] === D ? s.hi - 1 : s.hi;
+      return i >= 0 ? s.bars[i].c : null;
+    };
     const closeOf = (sym: string): number | null => {
       const s = series.get(sym);
       return s && s.hi >= 0 ? s.bars[s.hi].c : null;
@@ -313,6 +321,11 @@ export function runBacktest(input: BacktestInput): BacktestResult {
       const still: Working[] = [];
       for (const w of working) {
         const bar = barToday(w.symbol);
+        // max_gap_down_pct: a resting entry doesn't fill after a gap down (the live engine cancels it intraday).
+        if (bar && gapDownReason(bar.o, prevCloseOf(w.symbol), R)) {
+          expiredEntries++;
+          continue;
+        }
         const fill = !bar ? null : bar.o <= w.limit ? bar.o : bar.l <= w.limit ? w.limit : null;
         if (fill == null) {
           still.push(w);

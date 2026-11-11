@@ -293,3 +293,30 @@ describe("backtest math helpers", () => {
     expect(periodStart("2026-01-15", "2Y")).toBe("2024-01-15");
   });
 });
+
+describe("backtest: new Rules settings (fixes #8, #13)", () => {
+  it("max_gap_down_pct: a resting entry doesn't fill after a gap down", () => {
+    const sim: [number, number, number, number][] = [[100, 101, 99, 100], [90, 92, 89, 91], [91, 92, 90, 91]];
+    expect(run(sim).tradesList.length).toBe(1); // default: fills at the 90 open
+    const r = run(sim, { rules: rulesFor({ max_hold_days: 0, max_gap_down_pct: 5 }, "free") });
+    expect(r.tradesList.length).toBe(0);
+    expect(r.expiredEntries).toBe(1);
+  });
+
+  it("min_atr_pct: skips a stock whose ATR is under N% of the price", () => {
+    const sim: [number, number, number, number][] = [[100, 101, 99, 100], [100, 101, 99.5, 100]];
+    expect(run(sim, { rules: rulesFor({ max_hold_days: 0, min_atr_pct: 5 }, "free") }).tradesList.length).toBe(0); // ATR 2%
+    expect(run(sim, { rules: rulesFor({ max_hold_days: 0, min_atr_pct: 1 }, "free") }).tradesList.length).toBe(1);
+  });
+
+  it("reentry_cooldown_days: no re-entry the day a trade closed", () => {
+    // Fill day 1 at 100, stopped day 2 (low 95 < 96); picked again every day.
+    const s = setup([[100, 101, 99, 100], [100, 101, 99.5, 100], [97, 98, 95, 96], [96, 97, 95.5, 96], [96, 97, 95.5, 96]]);
+    const every: Picker = () => ({ list: [cand("X")], stale: [] });
+    const base = { box: "free" as const, bars: { X: s.bars }, symbols: ["X"], start: s.start, end: s.end, pick: every };
+    const off = runBacktest({ ...base, rules: rulesFor({ max_hold_days: 0 }, "free") });
+    const on = runBacktest({ ...base, rules: rulesFor({ max_hold_days: 0, reentry_cooldown_days: 2 }, "free") });
+    const entries = (r: typeof off) => r.tradesList.map((t) => t.entryDate);
+    expect(entries(on).length).toBeLessThan(entries(off).length);
+  });
+});

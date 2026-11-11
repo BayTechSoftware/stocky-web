@@ -180,6 +180,15 @@ export function entrySlots(R: Rules, occupied: number): { wantN: number; skip?: 
   return { wantN, skip: R.maxNewPerRun === 0 ? "new trades per run set to 0" : `book full (${R.maxPositions} positions/orders)` };
 }
 
+/** Why a session's open is too far below the previous close (max_gap_down_pct), or undefined. */
+export function gapDownReason(open: number | null | undefined, prevClose: number | null | undefined, R: Rules): string | undefined {
+  if (R.maxGapDownPct <= 0 || open == null || prevClose == null || !(prevClose > 0)) return undefined;
+  const gap = 1 - open / prevClose;
+  return gap > R.maxGapDownPct
+    ? `gapped down ${(gap * 100).toFixed(1)}% at the open (limit ${+(R.maxGapDownPct * 100).toFixed(2)}%)`
+    : undefined;
+}
+
 export type EntryPlan = { ok: false; reason: string } | { ok: true; qty: number; br: Bracket; reason: string };
 
 /**
@@ -196,7 +205,14 @@ export function planEntry(
 ): EntryPlan {
   if (!bars || bars.length < 30 || ref == null) return { ok: false, reason: "not enough price history" };
   if (ref < R.minPrice) return { ok: false, reason: `price under $${R.minPrice}` };
-  const br = bracket(ref, atr(bars), R);
+  const a14 = atr(bars);
+  if (R.minAtrPct > 0 && (a14 == null || a14 / ref < R.minAtrPct)) {
+    return { ok: false, reason: `moves too little: ATR(14) ${a14 == null ? "n/a" : `${((a14 / ref) * 100).toFixed(2)}%`} < ${+(R.minAtrPct * 100).toFixed(2)}% of the price` };
+  }
+  const last = bars[bars.length - 1];
+  const gap = gapDownReason(last?.o, bars[bars.length - 2]?.c, R);
+  if (gap) return { ok: false, reason: `${c.reason} — ${gap}` };
+  const br = bracket(ref, a14, R);
   const sz = sizeQty({ equity, available, price: br.limit, riskPerShare: br.riskPerShare }, R);
   if (!sz.qty) return { ok: false, reason: `${c.reason} — ${sz.why}` };
   return { ok: true, qty: sz.qty, br, reason: br.target == null ? `${c.reason} · stop only` : c.reason };

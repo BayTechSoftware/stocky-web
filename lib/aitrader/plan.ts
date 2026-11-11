@@ -30,6 +30,8 @@ export interface Rules {
   universeAdd: string[];
   universeRemove: string[];
   middayEntries: boolean; // runs while the market is open may open new trades
+  maxGapDownPct: number; // fraction; 0 = off
+  minAtrPct: number; // fraction; 0 = off
   reentryCooldownDays: number; // 0 = off; 1 = no same-day re-entry
 }
 
@@ -68,6 +70,8 @@ export function rulesFor(settings: Record<string, unknown> | null | undefined, b
     universeAdd: parseSymbols(all.universe_add),
     universeRemove: parseSymbols(all.universe_remove),
     middayEntries: bool("midday_entries"),
+    maxGapDownPct: pct("max_gap_down_pct"),
+    minAtrPct: pct("min_atr_pct"),
     reentryCooldownDays: num("reentry_cooldown_days"),
   };
 }

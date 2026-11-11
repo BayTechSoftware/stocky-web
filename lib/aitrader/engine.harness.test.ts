@@ -205,3 +205,19 @@ describe("engine harness: box size changes (fix #9)", () => {
     expect(r.cash).toBe(5000);
   });
 });
+
+describe("engine harness: gap down (fix #13)", () => {
+  it("cancels a resting entry during the session when the stock gapped down too far", async () => {
+    alp.clock = { ...alp.clock, is_open: true, timestamp: "2026-11-11T15:00:00Z" };
+    const db = entryWorld({ max_gap_down_pct: 5, max_new_per_run: 0 });
+    alp.bars.AAPL = dailyBars(80, 100, "2026-11-12"); // last bar = today (forming)
+    const todayBar = alp.bars.AAPL[alp.bars.AAPL.length - 1];
+    todayBar.t = "2026-11-11T05:00:00Z";
+    todayBar.o = 80;
+    alp.orders.push(fakeOrder({ id: "w1", symbol: "AAPL", client_order_id: "stk-mylist-e-AAPL-2026-11-10", status: "new" }));
+    db.tables.ai_orders.push({ id: "w", book_id: "book-my", symbol: "AAPL", side: "buy", kind: "entry", qty: 3, limit_price: 101, alpaca_order_id: "w1", leg_ids: [], status: "new", filled_qty: 0, created_at: "2026-11-10T22:30:00Z" });
+    const [r] = await run(db);
+    expect(alp.cancelled).toEqual(["w1"]);
+    expect(r.decisions.some((d) => d.action === "cancel" && /gapped down/.test(d.reason))).toBe(true);
+  });
+});
