@@ -21,6 +21,7 @@ import type { createAdminClient } from "@/lib/supabase/admin";
 import * as A from "@/lib/alpaca";
 import { bookState, ledgerFills, shortOrderIds } from "./ledger";
 import { loadFills, loadOrders, must } from "./rows";
+import { ownerOf } from "./live";
 import { anchorToFill, entryOrderBody, isStaleEntry, reservedCash, rulesFor, type Rules } from "./plan";
 import { freeUniverse } from "./universe";
 import { atr, type Candidate } from "./setups";
@@ -255,8 +256,10 @@ export async function runAiTrader(opts: { admin: Admin; mode: RunMode; userId?: 
       }
       out.push(...(await runForUser(admin, mode, books, creds)));
     } catch (e) {
+      // A failure before the per-book loop (keys, clock, ledger reads): leave a trace on every book.
       const msg = e instanceof Error ? e.message : String(e);
       out.push(...skip("").map((s) => ({ ...s, note: undefined, error: msg })));
+      for (const b of books) await logRun(admin, b.id, mode, { book: b.name, mode, equity: 0, cash: 0, available: 0, decisions: [], error: msg }, msg);
     }
   }
   return out;
@@ -295,6 +298,32 @@ async function runForUser(admin: Admin, mode: RunMode, books: BookRow[], creds: 
   for (const r of remote) {
     remoteById.set(r.id, r);
     for (const l of r.legs ?? []) remoteById.set(l.id, l);
+  }
+
+  // Our own orders by their client id prefix (stk-<book>-…), as syncLive does: an order that was placed
+  // but never recorded (the insert failed) still owns its fills, and is recorded now so its stop counts.
+  const bookIdByKey = new Map(books.map((b) => [b.key as string, b.id]));
+  const known = new Set(ours.map((o) => o.alpaca_order_id).filter(Boolean));
+  const recovered = recoveredOrders(remote, bookIdByKey, known);
+  for (const r of remote) {
+    const key = ownerOf(r.client_order_id ?? "");
+    const bid = key ? bookIdByKey.get(key) : undefined;
+    if (!bid) continue;
+    bookOfOrder.set(r.id, bid);
+    for (const l of r.legs ?? []) bookOfOrder.set(l.id, bid);
+  }
+  const recoveryNotes = new Map<string, string>();
+  if (recovered.length) {
+    const { data: rec, error: recErr } = await admin
+      .from("ai_orders")
+      .upsert(recovered, { onConflict: "alpaca_order_id", ignoreDuplicates: true })
+      .select("id, book_id, symbol, side, kind, qty, limit_price, stop_price, target_price, leg_ids, alpaca_order_id, client_order_id, status, filled_qty, filled_avg, created_at");
+    if (recErr) throw new Error(`ai_orders (recovering unrecorded orders): ${recErr.message}`);
+    for (const o of (rec ?? []) as OrderRow[]) {
+      ours.push(o);
+      known.add(o.alpaca_order_id);
+      recoveryNotes.set(o.book_id, [recoveryNotes.get(o.book_id), `recorded ${o.symbol} order ${o.alpaca_order_id} that was placed but missing from the ledger.`].filter(Boolean).join(" "));
+    }
   }
   for (const o of ours) {
     const r = o.alpaca_order_id ? remoteById.get(o.alpaca_order_id) : undefined;
@@ -427,7 +456,7 @@ async function runForUser(admin: Admin, mode: RunMode, books: BookRow[], creds: 
     const fills = ledgerFills(allFills.filter((f) => f.book_id === b.id), shortEntries);
     const st = bookState(b.start_cash, fills);
     const decisions: Decision[] = [];
-    const notes: string[] = [];
+    const notes: string[] = recoveryNotes.has(b.id) ? [recoveryNotes.get(b.id)!] : [];
     const orders = ours.filter((o) => o.book_id === b.id);
     const R = rulesOf.get(b.id)!;
     const dry = mode === "dry";
@@ -493,8 +522,9 @@ async function runForUser(admin: Admin, mode: RunMode, books: BookRow[], creds: 
         if (!why) continue;
         if (orders.some((o) => o.kind === "exit" && o.stop_price == null && o.symbol === pos.symbol && OPEN.has(o.status))) continue;
         if (!dry) {
-          const ok = await attempt(pos.symbol, () => exitPosition(b, pos.symbol, pos.qty, why!, orders).then(() => true));
-          if (!ok) continue;
+          const res = await attempt(pos.symbol, () => exitPosition(b, pos.symbol, pos.qty, why!, orders).then((n) => ({ n })));
+          if (!res) continue;
+          if (res.n) notes.push(res.n);
         }
         exited.add(pos.symbol);
         decisions.push({ symbol: pos.symbol, action: "sell", qty: pos.qty, price: priceOf(pos.symbol) ?? undefined, reason: why });
@@ -544,7 +574,7 @@ async function runForUser(admin: Admin, mode: RunMode, books: BookRow[], creds: 
             const clientId = `stk-${b.key}-e-${c.symbol}-${now.getTime()}`;
             const o = await attempt(c.symbol, () => A.submitOrder(creds, entryOrderBody(c.symbol, qty, br, clientId)));
             if (!o) continue;
-            const { error } = await admin.from("ai_orders").insert({
+            const error = await recordOrder(admin, {
               book_id: b.id,
               symbol: c.symbol,
               side: "buy",
@@ -560,7 +590,7 @@ async function runForUser(admin: Admin, mode: RunMode, books: BookRow[], creds: 
               client_order_id: clientId,
               status: o.status,
             });
-            if (error) notes.push(`${c.symbol}: order ${o.id} placed but not recorded (${error.message}) — check Alpaca.`);
+            if (error) notes.push(`${c.symbol}: order ${o.id} placed but not recorded (${error}) — the next run records it from Alpaca.`);
           }
           available -= qty * br.limit;
           occupied.add(c.symbol);
@@ -737,7 +767,8 @@ async function runForUser(admin: Admin, mode: RunMode, books: BookRow[], creds: 
         book_id: b.id, symbol, side: "sell" as const, kind: "exit" as const, qty, reason: why,
         stop_price: crossed ? null : stop, alpaca_order_id: o.id, client_order_id: clientId, status: o.status,
       };
-      await admin.from("ai_orders").insert(row);
+      const recErr = await recordOrder(admin, row);
+      if (recErr) decisions.push({ symbol, action: "hold", reason: `stop ${o.id} placed but not recorded (${recErr}) — the next run records it from Alpaca` });
       remoteById.set(o.id, o);
     }
     decisions.push({ symbol, action: crossed ? "sell" : "hold", qty, stop: crossed ? undefined : stop, reason: why });
@@ -766,14 +797,67 @@ async function runForUser(admin: Admin, mode: RunMode, books: BookRow[], creds: 
     const o = await A.submitOrder(creds, {
       symbol, qty: String(qty), side: "sell", type: "market", time_in_force: "day", client_order_id: clientId,
     });
-    await admin.from("ai_orders").insert({
+    const recErr = await recordOrder(admin, {
       book_id: b.id, symbol, side: "sell", kind: "exit", qty, reason: why,
       alpaca_order_id: o.id, client_order_id: clientId, status: o.status,
     });
+    // Never throw here: the sell is queued, so the caller must treat the position as exited (no second stop).
+    return recErr ? `${symbol}: exit ${o.id} placed but not recorded (${recErr}) — the next run records it from Alpaca.` : null;
   }
 }
 
 const LIVE = new Set([...OPEN, "pending_replace"]);
+
+/** Insert an ai_orders row, retried (3 tries); returns the last error message, or null once recorded. */
+export async function recordOrder(admin: Admin, row: Record<string, unknown>, tries = 3): Promise<string | null> {
+  let last = "";
+  for (let i = 0; i < tries; i++) {
+    // upsert on alpaca_order_id: a retry after a lost reply can't create a duplicate row.
+    const { error } = await admin.from("ai_orders").upsert(row, { onConflict: "alpaca_order_id", ignoreDuplicates: true });
+    if (!error) return null;
+    last = error.message;
+    if (i < tries - 1) await sleep(300 * (i + 1));
+  }
+  return last;
+}
+
+const numOrNull = (v: string | null | undefined) => (v == null || v === "" ? null : Number(v));
+
+/**
+ * ai_orders rows for Rules orders that exist at Alpaca (client id stk-<book>-…) but not in the ledger.
+ * The kind comes from the id's role: -e- entry; -s- (protective stop) and -x- (market exit) are exits.
+ */
+export function recoveredOrders(remote: A.Order[], bookIdByKey: Map<string, string>, known: Set<string | null>): Record<string, unknown>[] {
+  const out: Record<string, unknown>[] = [];
+  for (const r of remote) {
+    const cid = r.client_order_id ?? "";
+    const key = ownerOf(cid);
+    const bid = key ? bookIdByKey.get(key) : undefined;
+    if (!bid || !cid.startsWith("stk-") || known.has(r.id)) continue;
+    const role = cid.slice(`stk-${key}-`.length).split("-")[0];
+    const legs = r.legs ?? [];
+    const legStop = legs.find((l) => l.type === "stop" || l.type === "stop_limit")?.stop_price;
+    out.push({
+      book_id: bid,
+      symbol: r.symbol,
+      side: r.side,
+      kind: role === "e" ? "entry" : "exit",
+      qty: numOrNull(r.qty) ?? 0,
+      limit_price: numOrNull(r.limit_price),
+      stop_price: numOrNull(role === "e" ? legStop : r.stop_price),
+      target_price: numOrNull(legs.find((l) => l.type === "limit")?.limit_price),
+      reason: "recovered from Alpaca (placed but not recorded)",
+      alpaca_order_id: r.id,
+      leg_ids: legs.map((l) => l.id),
+      client_order_id: cid,
+      status: r.status,
+      filled_qty: numOrNull(r.filled_qty) ?? 0,
+      filled_avg: numOrNull(r.filled_avg_price),
+      created_at: r.created_at,
+    });
+  }
+  return out;
+}
 
 /** Record a run; a failed insert is logged (the run itself already happened). */
 async function logRun(admin: Admin, bookId: string, mode: RunMode, summary: unknown, error: string | null) {
