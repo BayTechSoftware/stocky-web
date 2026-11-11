@@ -307,7 +307,8 @@ export async function loadAiView(
     );
     // A short's stop and target legs fill as buys under the entry's row, so the ledger names those.
     const coverIds = new Set([...covers, ...st.coverOrderIds]);
-    const bookOrders = orders.filter((o) => o.book_id === b.id);
+    // Newest first: a position's entry is its latest entry order (not one from an earlier round trip).
+    const bookOrders = orders.filter((o) => o.book_id === b.id).reverse();
 
     const positions: AiPositionView[] = Array.from(st.positions.values()).map((p) => {
       const price = px.get(p.symbol) ?? marksOf.get(b.id as string)?.[p.symbol] ?? null;
