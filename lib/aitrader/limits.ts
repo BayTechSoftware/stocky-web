@@ -146,7 +146,7 @@ export const CHECK_LIMITS: LimitDef[] = [
   { key: "bear_block_conf", group: "Checks", label: "Block when the case against is at least", unit: "%", kind: "number", min: 0, max: 100, int: true, def: 70, hint: "confidence; only in block mode" },
   { key: "bear_model", group: "Checks", label: "Bear check model", kind: "select", options: ["haiku", "sonnet", "opus"], def: "haiku", hint: "counts toward the weekly cap" },
   { key: "memory_trades", group: "Checks", label: "Past trades shown per stock", unit: "", kind: "number", min: 0, max: 20, int: true, def: 5, hint: "Claude sees its own last trades in a stock before trading it again; 0 = off" },
-  { key: "sentiment", group: "Checks", label: "Social sentiment (StockTwits)", kind: "select", options: ["off", "stocktwits"], def: "off", hint: "adds bullish/bearish chatter to the score" },
+  { key: "sentiment", group: "Checks", label: "Social sentiment (StockTwits)", kind: "select", options: ["off", "stocktwits"], def: "off", hint: "adds bullish/bearish chatter to the score. StockTwits currently blocks automated access, so it has no effect yet" },
   // Same shape as the generated w_* weights (Scorecard weights), shown next to the switch it belongs to.
   { key: "w_sentiment", group: "Checks", label: "Sentiment weight", unit: "", kind: "number", min: 0, max: 100, def: 10, hint: "only when social sentiment is on" },
 ];
