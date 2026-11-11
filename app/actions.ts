@@ -2,7 +2,7 @@
 
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { computeSignalsForSymbols } from "@/lib/refresh";
+import { computeSignalsForSymbols, hasAttemptedAt, lastTry } from "@/lib/refresh";
 import { loadCreds, runAiTrader as runAiTraderEngine } from "@/lib/aitrader/engine";
 import { RUNNER_LIMITS, defsForBook, effective, validateLimits } from "@/lib/aitrader/limits";
 import type { AiRun } from "@/lib/aitrader/view";
@@ -104,12 +104,14 @@ export async function refreshSignals(): Promise<
   if (symbols.length === 0) return { updated: 0, refreshed: 0, total: 0 };
 
   const admin = createAdminClient();
-  // Stalest first (by last signal update) so repeated clicks rotate coverage.
+  // Stalest first (by last attempt, else last signal) so repeated clicks rotate coverage.
   const { data: meta } = await admin
     .from("symbol_signals")
-    .select("symbol, updated_at")
+    .select((await hasAttemptedAt(admin)) ? "symbol, updated_at, attempted_at" : "symbol, updated_at")
     .in("symbol", symbols);
-  const last = new Map((meta ?? []).map((m) => [m.symbol as string, (m.updated_at as string) ?? ""]));
+  const last = new Map(
+    ((meta ?? []) as unknown as { symbol: string; updated_at: string | null; attempted_at?: string | null }[]).map((m) => [m.symbol, lastTry(m)])
+  );
   const ordered = symbols
     .slice()
     .sort((a, b) => (last.get(a) ?? "").localeCompare(last.get(b) ?? ""));

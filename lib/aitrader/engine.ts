@@ -39,6 +39,7 @@ import {
   shortConflict,
   shortLookupSkip,
   type ShortCheck,
+  type StaleSignal,
 } from "./decide";
 
 // Kept exported from here for existing importers; the pure logic lives in ./decide.
@@ -517,9 +518,11 @@ async function runForUser(admin: Admin, mode: RunMode, books: BookRow[], creds: 
         if (noSlots) decisions.push({ symbol: "—", action: "skip", reason: noSlots });
 
         const { list: cands, stale } = wantN > 0 ? candidatesFor(b, R) : { list: [], stale: [] };
-        for (const s of stale) decisions.push({ symbol: s.symbol, action: "skip", reason: `signal is ${s.days} days old` });
+        for (const s of stale) {
+          decisions.push({ symbol: s.symbol, action: "skip", reason: s.days == null ? "signal has no update time" : `signal is ${s.days} days old` });
+        }
         if (stale.length) {
-          notes.push(`Not entered on ${stale.length} stale signal${stale.length > 1 ? "s" : ""} (> 3 days old): ${stale.map((s) => s.symbol).join(", ")} — refresh signals to trade them.`);
+          notes.push(`Not entered on ${stale.length} stale signal${stale.length > 1 ? "s" : ""} (> ${R.maxSignalAgeDays} day${R.maxSignalAgeDays === 1 ? "" : "s"} old): ${stale.map((s) => s.symbol).join(", ")} — refresh signals to trade them.`);
         }
 
         for (const c of cands) {
@@ -740,7 +743,7 @@ async function runForUser(admin: Admin, mode: RunMode, books: BookRow[], creds: 
     decisions.push({ symbol, action: crossed ? "sell" : "hold", qty, stop: crossed ? undefined : stop, reason: why });
   }
 
-  function candidatesFor(b: BookRow, R: Rules): { list: Candidate[]; stale: { symbol: string; days: number }[] } {
+  function candidatesFor(b: BookRow, R: Rules): { list: Candidate[]; stale: StaleSignal[] } {
     if (b.key === "mylist") return mylistCandidates(listOf.get(b.user_id) ?? [], (s) => sigBy.get(s), R, today);
     return { list: freeCandidates(universeOf(b), (s) => barsBy[s], R), stale: [] };
   }

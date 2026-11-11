@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { timingSafeEqual } from "node:crypto";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { computeSignalsForSymbols } from "@/lib/refresh";
+import { computeSignalsForSymbols, hasAttemptedAt, lastTry } from "@/lib/refresh";
 
 export const maxDuration = 300;
 
@@ -52,16 +52,16 @@ export async function GET(req: NextRequest) {
 
   const errors: string[] = [];
 
-  // Fairness: refresh the STALEST symbols first — ordered by last ATTEMPT (recorded
-  // below even on failure), so coverage rotates across runs and a perpetually-failing
+  // Fairness: refresh the STALEST symbols first — ordered by last ATTEMPT (attempted_at,
+  // recorded even on failure; supabase/signals_attempted_at.sql), so coverage rotates across runs and a perpetually-failing
   // ticker can't camp at the front of the queue and starve the rest.
   const { data: meta, error: metaErr } = await admin
     .from("symbol_signals")
-    .select("symbol, updated_at")
+    .select((await hasAttemptedAt(admin)) ? "symbol, updated_at, attempted_at" : "symbol, updated_at")
     .in("symbol", allSymbols);
   if (metaErr) errors.push(`meta: ${metaErr.message}`);
   const lastUpdated = new Map(
-    (meta ?? []).map((m) => [m.symbol as string, (m.updated_at as string) ?? ""])
+    ((meta ?? []) as unknown as { symbol: string; updated_at: string | null; attempted_at?: string | null }[]).map((m) => [m.symbol, lastTry(m)])
   );
   const symbols = allSymbols
     .slice()

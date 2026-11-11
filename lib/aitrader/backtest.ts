@@ -35,6 +35,7 @@ import {
   mylistCandidates,
   planEntry,
   type SignalLite,
+  type StaleSignal,
 } from "./decide";
 
 export const PERIODS = { "1M": 1, "3M": 3, "6M": 6, "1Y": 12, "2Y": 24 } as const;
@@ -79,7 +80,7 @@ export interface DayCtx {
   sigOf: (symbol: string) => SignalLite | undefined;
 }
 
-export type Picker = (ctx: DayCtx, R: Rules) => { list: Candidate[]; stale: { symbol: string; days: number }[] };
+export type Picker = (ctx: DayCtx, R: Rules) => { list: Candidate[]; stale: StaleSignal[] };
 
 export interface BacktestInput {
   box: "mylist" | "free";

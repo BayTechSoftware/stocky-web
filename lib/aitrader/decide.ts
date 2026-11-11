@@ -77,21 +77,28 @@ export interface SignalLite {
   updated_at?: string | null;
 }
 
+/** A skipped signal: its age in days, or null when it has no update time. */
+export interface StaleSignal {
+  symbol: string;
+  days: number | null;
+}
+
 /** My List candidates: BUY / WASHOUT (+ WATCH if enabled) at ≥ min score, fresh signals only, best score first. */
 export function mylistCandidates(
   list: string[],
   sigOf: (symbol: string) => SignalLite | undefined,
   R: Rules,
   today: string
-): { list: Candidate[]; stale: { symbol: string; days: number }[] } {
+): { list: Candidate[]; stale: StaleSignal[] } {
   const ok = new Set(["BUY", "WASHOUT", ...(R.enterOnWatch ? ["WATCH"] : [])]);
-  const stale: { symbol: string; days: number }[] = [];
+  const stale: StaleSignal[] = [];
   const picks = list
     .map((sym) => ({ sym, sig: sigOf(sym) }))
     .filter(({ sig }) => ok.has(String(sig?.assessment)) && (sig?.score ?? 0) >= R.minScore)
     .filter(({ sym, sig }) => {
       const days = signalAgeDays(sig?.updated_at, today);
-      if (R.maxSignalAgeDays > 0 && days != null && days > R.maxSignalAgeDays) {
+      // No update time = unknown age = stale (never trusted when the age check is on).
+      if (R.maxSignalAgeDays > 0 && (days == null || days > R.maxSignalAgeDays)) {
         stale.push({ symbol: sym, days });
         return false;
       }
