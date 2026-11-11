@@ -55,6 +55,30 @@ export function claudeOrderKind(side: string, clientOrderId: string): "entry" | 
 
 const num = (v: string | null | undefined) => (v == null || v === "" ? null : Number(v));
 
+/** Statuses whose order can still change at Alpaca (fill, cancel, replace). */
+const CAN_CHANGE = new Set(["new", "accepted", "pending_new", "partially_filled", "held", "accepted_for_bidding", "pending_cancel", "pending_replace", "submitted"]);
+
+/** Re-read this much before the cursor: fills can be reported a little late. */
+export const SYNC_OVERLAP_MS = 6 * 3_600_000;
+
+/**
+ * Where syncLive's Alpaca reads start (instead of every book's whole history each 15 s):
+ *   fills  — from the newest recorded fill (the per-user cursor) minus an overlap;
+ *   orders — from the oldest order that can still change, or the fill cursor, whichever is earlier.
+ * With no fills yet, from the books' creation.
+ */
+export function syncWindow(
+  booksCreated: string,
+  lastFillAt: string | null,
+  known: { status: string; created_at?: string | null }[]
+): { fillsAfter: string; ordersAfter: string } {
+  const back = (iso: string) => new Date(Math.max(Date.parse(booksCreated), Date.parse(iso) - SYNC_OVERLAP_MS)).toISOString();
+  const fillsAfter = lastFillAt ? back(lastFillAt) : booksCreated;
+  const oldestOpen = known.filter((k) => CAN_CHANGE.has(k.status) && k.created_at).map((k) => k.created_at!).sort()[0];
+  const ordersAfter = [fillsAfter, oldestOpen ? back(oldestOpen) : null].filter((x): x is string => !!x).sort()[0];
+  return { fillsAfter, ordersAfter };
+}
+
 export function planLiveSync(
   known: KnownOrder[],
   remote: Order[],

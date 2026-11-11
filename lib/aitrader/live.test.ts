@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { FillActivity, Order } from "../alpaca";
-import { ownerOf, planLiveSync, tradesFromFills, type KnownOrder } from "./live";
+import { ownerOf, planLiveSync, syncWindow, tradesFromFills, type KnownOrder } from "./live";
 
 const books = new Map([
   ["mylist", "B-rules"],
@@ -93,5 +93,25 @@ describe("tradesFromFills", () => {
     ]);
     expect(t.map((x) => x.symbol)).toEqual(["AMD", "HIMS"]);
     expect(t[1]).toMatchObject({ qty: 4, price: 11.5, at: "2026-11-09T15:00:00Z" });
+  });
+});
+
+
+describe("syncWindow (fix #12: syncLive reads only what's new)", () => {
+  const created = "2026-01-01T00:00:00.000Z";
+  it("starts at the books' creation with no fills yet", () => {
+    expect(syncWindow(created, null, [])).toEqual({ fillsAfter: created, ordersAfter: created });
+  });
+  it("reads fills from the cursor minus 6 h, orders from the oldest open one", () => {
+    const w = syncWindow(created, "2026-11-11T18:00:00.000Z", [
+      { status: "filled", created_at: "2026-02-01T00:00:00.000Z" },
+      { status: "new", created_at: "2026-11-05T22:30:00.000Z" },
+    ]);
+    expect(w.fillsAfter).toBe("2026-11-11T12:00:00.000Z");
+    expect(w.ordersAfter).toBe("2026-11-05T16:30:00.000Z");
+  });
+  it("with nothing open, orders follow the fill cursor", () => {
+    const w = syncWindow(created, "2026-11-11T18:00:00.000Z", [{ status: "filled", created_at: "2026-02-01T00:00:00.000Z" }]);
+    expect(w.ordersAfter).toBe(w.fillsAfter);
   });
 });

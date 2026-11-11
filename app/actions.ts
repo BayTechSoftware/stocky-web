@@ -6,7 +6,7 @@ import { computeSignalsForSymbols, hasAttemptedAt, lastTry } from "@/lib/refresh
 import { loadCreds, runAiTrader as runAiTraderEngine } from "@/lib/aitrader/engine";
 import { RUNNER_LIMITS, defsForBook, effective, overridesOnly, validateLimits } from "@/lib/aitrader/limits";
 import type { AiRun } from "@/lib/aitrader/view";
-import { planLiveSync, type KnownOrder } from "@/lib/aitrader/live";
+import { planLiveSync, syncWindow, type KnownOrder } from "@/lib/aitrader/live";
 import { loadOrders, must } from "@/lib/aitrader/rows";
 import { baselineOf, loadAdjustments, sizeOf } from "@/lib/aitrader/cash";
 import { AlpacaError, getClock, getDailyBars, getPaperAccount, listFills, listOrders, type Bar, type Creds } from "@/lib/alpaca";
@@ -515,9 +515,23 @@ export async function syncLive(): Promise<{ ok: true } | { error: string }> {
     const { data: books } = await admin.from("ai_books").select("id, key, created_at").eq("user_id", user.id);
     if (!books?.length) return { ok: true };
     const ids = books.map((b) => b.id as string);
-    const known = await loadOrders<KnownOrder>(admin, ids, "id, book_id, alpaca_order_id, leg_ids, status, filled_qty, filled_avg");
+    const known = await loadOrders<KnownOrder & { created_at: string }>(
+      admin,
+      ids,
+      "id, book_id, alpaca_order_id, leg_ids, status, filled_qty, filled_avg, created_at"
+    );
     const since = books.map((b) => b.created_at as string).sort()[0];
-    const [remote, fills] = await Promise.all([listOrders(creds, since), listFills(creds, since)]);
+    // Cursor: the newest fill already recorded for this user's books — read only what's new since.
+    const { data: lastFill, error: lfErr } = await admin
+      .from("ai_fills")
+      .select("transacted_at")
+      .in("book_id", ids)
+      .order("transacted_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (lfErr) return { error: `ai_fills: ${lfErr.message}` };
+    const win = syncWindow(since, (lastFill?.transacted_at as string | undefined) ?? null, known);
+    const [remote, fills] = await Promise.all([listOrders(creds, win.ordersAfter), listFills(creds, win.fillsAfter)]);
     const plan = planLiveSync(
       known,
       remote,
