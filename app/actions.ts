@@ -4,7 +4,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { computeSignalsForSymbols, hasAttemptedAt, lastTry } from "@/lib/refresh";
 import { loadCreds, runAiTrader as runAiTraderEngine } from "@/lib/aitrader/engine";
-import { RUNNER_LIMITS, defsForBook, effective, validateLimits } from "@/lib/aitrader/limits";
+import { RUNNER_LIMITS, defsForBook, effective, overridesOnly, validateLimits } from "@/lib/aitrader/limits";
 import type { AiRun } from "@/lib/aitrader/view";
 import { planLiveSync, type KnownOrder } from "@/lib/aitrader/live";
 import { loadOrders, must } from "@/lib/aitrader/rows";
@@ -400,13 +400,35 @@ export async function saveBookLimits(bookKey: string, values: Record<string, unk
   const admin = createAdminClient();
   const sized = await recordSizeChange(admin, book, Number(effective(defs, v.settings).budget));
   if ("error" in sized) return sized;
-  const { error } = await admin.from("ai_books").update({ settings: v.settings }).eq("id", book.id);
+  // Only what differs from the defaults is stored: a later default change reaches this box too.
+  const { error } = await admin.from("ai_books").update({ settings: overridesOnly(defs, v.settings) }).eq("id", book.id);
   if (error) {
     if (sized.adjustmentId) await admin.from("ai_cash_adjustments").delete().eq("id", sized.adjustmentId);
     return { error: error.message };
   }
   revalidatePath("/dashboard");
   return { message: isClaude ? "Saved — the Mac applies them before Claude's next run." : "Saved — used from the next run." };
+}
+
+/**
+ * Reset one box's limits to the defaults: clears every saved override EXCEPT the box's size (budget),
+ * so start_cash, the P&L baseline and the ledger are untouched. Used by the tab's "Reset to defaults".
+ */
+export async function resetBookLimits(bookKey: string): Promise<Result> {
+  const { supabase, user } = await uid();
+  if (!user) return { error: "not signed in" };
+  // RLS: only finds the user's own book.
+  const { data: book, error: bookErr } = await supabase.from("ai_books").select("id, key, settings").eq("key", bookKey).maybeSingle();
+  if (bookErr) return { error: bookErr.message };
+  if (!book) return { error: "no such book" };
+  const defs = defsForBook(String(book.key));
+  const saved = (book.settings as Record<string, unknown> | null) ?? {};
+  const keep = validateLimits(defs.filter((d) => d.key === "budget"), { budget: saved.budget });
+  const settings = keep.ok ? overridesOnly(defs, keep.settings) : {};
+  const { error } = await createAdminClient().from("ai_books").update({ settings }).eq("id", book.id);
+  if (error) return { error: error.message };
+  revalidatePath("/dashboard");
+  return { message: "Reset to the defaults (the box size is kept)." };
 }
 
 /** Record a new box size as a dated cash adjustment (new − current baseline); nothing when the size is unchanged. */

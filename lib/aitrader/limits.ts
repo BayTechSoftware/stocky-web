@@ -372,6 +372,23 @@ export function validateLimits(
   const val = (k: string) => (k in out ? out[k] : defs.find((d) => d.key === k)?.def);
   const has = (k: string) => defs.some((d) => d.key === k);
 
+  // Over 100% of the book needs borrowed money: only with margin on.
+  if (has("max_position_pct") && has("allow_margin") && Number(val("max_position_pct")) > 100 && val("allow_margin") !== true) {
+    errors.push("Max position size over 100% needs Allow margin on");
+  }
+  // Slowing down must not run more often than normal.
+  if (has("throttle_interval_min") && has("interval_min") && Number(val("throttle_interval_min")) < Number(val("interval_min"))) {
+    errors.push("The slowed-down interval must be at least the normal run interval");
+  }
+  // The early look comes before the pre-market scan (when both are on).
+  if (has("premarket_early") && has("premarket_time")) {
+    const early = val("premarket_early");
+    const scan = val("premarket_time");
+    if (typeof early === "string" && typeof scan === "string" && TIME_RE.test(early) && TIME_RE.test(scan) && toMin(early) > toMin(scan)) {
+      errors.push("The early look must not be later than the pre-market scan");
+    }
+  }
+
   if (has("min_stop_pct") && has("max_stop_pct")) {
     const lo = Number(val("min_stop_pct"));
     const hi = Number(val("max_stop_pct"));
@@ -393,6 +410,37 @@ export function validateLimits(
     }
   }
   return errors.length ? { ok: false, errors } : { ok: true, settings: out };
+}
+
+/**
+ * Only the values that differ from their defaults (what a book stores), so a box saved before a
+ * default changed still picks up the new default. Missing keys = defaults (the Mac merges the same way:
+ * stocky-trader bin/limits.py apply_web).
+ */
+export function overridesOnly(defs: LimitDef[], settings: Settings): Settings {
+  const out: Settings = {};
+  for (const d of defs) {
+    if (!(d.key in settings)) continue;
+    const v = settings[d.key];
+    if (v === d.def || (typeof v === "number" && typeof d.def === "number" && Math.abs(v - d.def) < 1e-9)) continue;
+    out[d.key] = v;
+  }
+  return out;
+}
+
+/**
+ * Saved settings made safe for an engine: each value re-validated against its definition (clamped,
+ * rounded, parsed); a value that can't be read falls back to the default. Saved rows can predate a bound.
+ */
+export function clampSaved(defs: LimitDef[], saved: Record<string, unknown> | null | undefined): Settings {
+  const out: Settings = {};
+  for (const d of defs) {
+    const v = saved?.[d.key];
+    if (v === undefined || v === null) continue;
+    const r = validateLimits([d], { [d.key]: v });
+    if (r.ok && d.key in r.settings) out[d.key] = r.settings[d.key];
+  }
+  return out;
 }
 
 /** Defaults overlaid with a book's saved settings (for display and engines). */

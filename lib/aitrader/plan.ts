@@ -3,7 +3,7 @@
  * Every number comes from the book's settings (lib/aitrader/limits.ts), with the
  * contract's defaults where nothing is saved.
  */
-import { effective, parseSymbols, rulesDefs, type BoxKey } from "./limits";
+import { clampSaved, effective, parseSymbols, rulesDefs, type BoxKey } from "./limits";
 
 export interface Rules {
   budget: number;
@@ -35,7 +35,8 @@ export interface Rules {
 
 /** A book's effective rules: the contract defaults overlaid with its saved (validated) settings. */
 export function rulesFor(settings: Record<string, unknown> | null | undefined, box: BoxKey = "free"): Rules {
-  const e = effective(rulesDefs(box), settings);
+  // Re-clamped: a saved value outside today's bounds (or unreadable) never reaches the engine as-is.
+  const e = effective(rulesDefs(box), clampSaved(rulesDefs(box), settings));
   // Fields that don't apply to this box still get the contract default, so the shape is stable.
   const all = { ...effective(rulesDefs(box === "free" ? "mylist" : "free"), {}), ...e };
   const num = (k: string) => Number(all[k]);
@@ -52,7 +53,7 @@ export function rulesFor(settings: Record<string, unknown> | null | undefined, b
     dailyLossHaltPct: pct("daily_loss_halt_pct"),
     atrMult: num("atr_mult"),
     minStopPct: pct("min_stop_pct"),
-    maxStopPct: pct("max_stop_pct"),
+    maxStopPct: Math.max(pct("max_stop_pct"), pct("min_stop_pct")),
     rewardRisk: num("reward_risk"),
     entrySlipPct: pct("entry_slip_pct"),
     entryValidDays: validDays,
