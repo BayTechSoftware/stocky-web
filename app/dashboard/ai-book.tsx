@@ -1,23 +1,24 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useState, useTransition, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
-import { loadRunDetail, removeNote } from "../actions";
+import { loadRunDetail, removeNote, runAiTrader } from "../actions";
 import { money, moneySigned, pct, price as fprice, shares } from "@/lib/portfolio";
-import { CLAUDE_LIMITS, SCORECARD_GATE_LABEL, defsForBook, effective, rulesDefs } from "@/lib/aitrader/limits";
+import { CLAUDE_LIMITS, RUNNER_LIMITS, SCORECARD_GATE_LABEL, defsForBook, effective, rulesDefs, type LimitValue } from "@/lib/aitrader/limits";
+import type { SettingsSection } from "@/lib/aitrader/layout";
 import { gateVerdict, marketLine, signedPct, type AiReviewShadow, type AiReviewTrade, type AiShadowItem } from "@/lib/aitrader/reviews";
 import type { AiBookView, AiNote, AiReplayDay, AiReview, AiRun, AiRunLite, ClosedTrade, ExitReason } from "@/lib/aitrader/view";
-import { ClaudePlan, LABEL, RunDetail, col, when } from "./ai-run";
+import { ClaudePlan, LABEL, RunDetail, col, phaseName, when } from "./ai-run";
 import { BacktestPanel } from "./ai-backtest";
-import { LimitsEditor } from "./ai-settings";
+import { BoxSettings, RunnerSettings } from "./ai-settings";
 
 const BLURB: Record<AiBookView["key"], string> = {
-  mylist: "Rules only, no AI. Trades your watchlist on Stocky's signals, within the limits below. Runs on the website on weekday schedules.",
-  free: "Rules only, no AI. The Trader skill's daily chart setups across a curated large-cap universe (minus your list), within the limits below. Runs on the website on weekday schedules.",
+  mylist: "Fixed rules, no AI. Trades your watchlist on Stocky's signals, within your settings. Runs on the website on weekday schedules.",
+  free: "Fixed rules, no AI. Buys daily chart setups across a hand-picked list of large US companies (minus your list), within your settings. Runs on the website on weekday schedules.",
   "claude-mylist":
-    "Claude runs the day-trader-skill repo on your watchlist: scans, reads the news, times entries, within the limits below. On your Mac during market hours.",
+    "Claude day-trades your watchlist: it scans, reads the news and times each buy and sell, within your settings. Runs on your Mac during market hours.",
   "claude-free":
-    "Claude runs the day-trader-skill repo across the US market — free choice. Reads the news, times entries, within the limits below. On your Mac during market hours.",
+    "Claude day-trades any US stock it picks. It reads the news and times each buy and sell, within your settings. Runs on your Mac during market hours.",
 };
 
 export { col };
@@ -31,10 +32,11 @@ function Meter({ label, used, max, fmt }: { label: string; used: number | null; 
         <span className="text-[11px] text-dim">{label}</span>
         <span className="font-mono text-[11px] text-text tnum">
           {used == null ? "—" : fmt(used)} <span className="text-faint">/ {max > 0 ? fmt(max) : "no limit"}</span>
+          {p >= 100 && <span className="ml-1.5 rounded bg-surface2 px-1.5 py-px font-sans text-[10px] font-semibold text-dim">limit reached</span>}
         </span>
       </div>
       <div className="mt-1 h-1 overflow-hidden rounded-full bg-surface2">
-        <div className={`h-full rounded-full ${p >= 100 ? "bg-loss" : p >= 66 ? "bg-watch" : "bg-accent"}`} style={{ width: `${p}%` }} />
+        <div className={`h-full rounded-full ${p >= 100 ? "bg-dim" : p >= 66 ? "bg-watch" : "bg-accent"}`} style={{ width: `${p}%` }} />
       </div>
     </div>
   );
@@ -50,25 +52,28 @@ function LimitsUsed({ b }: { b: AiBookView }) {
       <div className="grid gap-3 sm:grid-cols-2">
         <Meter label="Trades today" used={used?.trades_today ?? null} max={Number(cfg.max_trades_per_day)} fmt={(n) => String(n)} />
         <Meter
-          label="Daily-loss budget used (loss at stops)"
+          label="Daily risk used (worst case at the stops)"
           used={used?.loss_at_risk_usd ?? null}
           max={Number(cfg.max_daily_loss_usd)}
           fmt={(n) => `$${n.toFixed(0)}`}
         />
         <div className="flex justify-between text-[11px]">
-          <span className="text-dim">Realized P&amp;L today</span>
+          <span className="text-dim">Profit/loss from closed trades today</span>
           <span className={`font-mono tnum ${col(used?.realized_pnl_today_usd)}`}>
             {used?.realized_pnl_today_usd != null ? moneySigned(used.realized_pnl_today_usd, 2) : "—"}
           </span>
         </div>
         <div className="flex justify-between text-[11px]">
-          <span className="text-dim">Open risk to stops</span>
+          <span className="text-dim">Could still lose if every stop hits</span>
           <span className="font-mono text-text tnum">{used?.open_risk_usd != null ? money(used.open_risk_usd, 2) : "—"}</span>
         </div>
         <div className="flex justify-between text-[11px]">
-          <span className="text-dim">Entries allowed (NY)</span>
+          <span className="text-dim">Buying window (NY)</span>
           <span className="font-mono text-text tnum">
-            {String(cfg.no_entries_before || "open")}–{String(cfg.no_entries_after || "any time")} · {cfg.flat_by ? `flat ${String(cfg.flat_by)}` : "may hold overnight"}
+            {!cfg.no_entries_before && !cfg.no_entries_after
+              ? "all day"
+              : `${String(cfg.no_entries_before || "open")}–${String(cfg.no_entries_after || "close")}`}{" "}
+            · {cfg.flat_by ? `sell all by ${String(cfg.flat_by)}` : "may hold overnight"}
           </span>
         </div>
         <div className="flex justify-between text-[11px]">
@@ -91,24 +96,24 @@ function LimitsUsed({ b }: { b: AiBookView }) {
   return (
     <div className="grid gap-3 sm:grid-cols-2">
       <Meter
-        label="Positions + working entries"
+        label="Stocks held + buy orders waiting"
         used={b.positions.length + b.pending.filter((o) => o.kind === "entry").length}
         max={Number(cfg.max_positions)}
         fmt={(n) => String(n)}
       />
       <div className="space-y-1 text-[11px]">
         <div className="flex justify-between">
-          <span className="text-dim">Risk per trade</span>
+          <span className="text-dim">Most I can lose on one trade</span>
           <span className="font-mono text-text tnum">{cfg.risk_pct}% · ≈{money((b.equity * Number(cfg.risk_pct)) / 100)}</span>
         </div>
         <div className="flex justify-between">
-          <span className="text-dim">Daily-loss halt</span>
+          <span className="text-dim">Stop buying after a bad day</span>
           <span className="font-mono text-text tnum">{halt > 0 ? `${halt}%` : "off"}</span>
         </div>
         <div className="flex justify-between">
-          <span className="text-dim">Target · time stop</span>
+          <span className="text-dim">Take profit at · sell after</span>
           <span className="font-mono text-text tnum">
-            {rr > 0 ? `${rr}R` : "stop only"} · {hold > 0 ? `${hold}d` : "no time stop"}
+            {rr > 0 ? `${rr}× the risk` : "no target"} · {hold > 0 ? `${hold} days` : "no time limit"}
           </span>
         </div>
       </div>
@@ -141,9 +146,16 @@ function LoadedRun({ d, loading }: { d: { run: AiRun } | { error: string } | und
 }
 
 /** Today's runs, newest first; open one to load its full trace + pipeline. */
-function Timeline({ runs, latestId }: { runs: AiRunLite[]; latestId: string | null }) {
+function Timeline({ runs, latestId, next }: { runs: AiRunLite[]; latestId: string | null; next: string | null }) {
   const { openId, detail, loading, toggle } = useRunDetails();
-  if (!runs.length) return null;
+  if (!runs.length) {
+    return (
+      <div>
+        <div className={`mb-1 ${LABEL}`}>Today&apos;s runs</div>
+        <Empty>No runs yet today{next ? `; next check about ${next}` : ""}.</Empty>
+      </div>
+    );
+  }
   return (
     <div>
       <div className={`mb-1 ${LABEL}`}>Today&apos;s runs ({runs.length})</div>
@@ -153,16 +165,16 @@ function Timeline({ runs, latestId }: { runs: AiRunLite[]; latestId: string | nu
             <li key={r.id}>
               <button
                 onClick={() => toggle(r.id)}
-                className="flex w-full items-start gap-2 px-2.5 py-1.5 text-left text-xs hover:bg-surface2/60"
+                className="flex w-full flex-wrap items-start gap-x-2 gap-y-0.5 px-2.5 py-1.5 text-left text-xs hover:bg-surface2/60"
               >
-                <span className="w-14 shrink-0 font-mono text-[11px] text-text tnum">{when(r.ran_at, false)}</span>
-                <span className="w-16 shrink-0 font-mono text-[10px] uppercase text-faint">{r.phase ?? "—"}</span>
-                <span className="min-w-0 flex-1 truncate text-dim">
+                <span className="shrink-0 font-mono text-[11px] text-text tnum sm:w-14">{when(r.ran_at, false)}</span>
+                <span className="shrink-0 text-[11px] text-faint sm:w-36">{phaseName(r.phase)}</span>
+                <span className="order-last min-w-0 basis-full text-dim sm:order-none sm:basis-0 sm:flex-1 sm:truncate">
                   {r.error ? <span className="text-loss">{r.error}</span> : r.reason ?? ""}
                 </span>
-                <span className="shrink-0 font-mono text-[10px] text-faint tnum">
-                  {r.buys > 0 && <span className="text-gain">{r.buys}B </span>}
-                  {r.sells > 0 && <span className="text-loss">{r.sells}S </span>}
+                <span className="ml-auto shrink-0 font-mono text-[10px] text-faint tnum">
+                  {r.buys > 0 && <span className="text-gain">{r.buys} buy{r.buys === 1 ? "" : "s"} </span>}
+                  {r.sells > 0 && <span className="text-loss">{r.sells} sell{r.sells === 1 ? "" : "s"} </span>}
                   {r.usage?.secs != null && `${Math.round(r.usage.secs)}s `}
                   {r.usage?.cost_usd != null && `$${Number(r.usage.cost_usd).toFixed(2)}`}
                   {r.id === latestId && " · latest"}
@@ -187,12 +199,12 @@ function ReplayDay({ d }: { d: AiReplayDay }) {
   const n = d.id.match(/-(\d+)$/)?.[1];
   return (
     <details className="group">
-      <summary className="flex cursor-pointer list-none items-start gap-2 px-2.5 py-1.5 text-xs hover:bg-surface2/60">
-        <span className="w-20 shrink-0 font-mono text-[11px] text-text tnum">
+      <summary className="flex cursor-pointer list-none flex-wrap items-start gap-x-2 gap-y-0.5 px-2.5 py-1.5 text-xs hover:bg-surface2/60">
+        <span className="shrink-0 sm:w-20 font-mono text-[11px] text-text tnum">
           {d.date}
           {n && n !== "1" ? <span className="text-faint"> #{n}</span> : null}
         </span>
-        <span className="w-16 shrink-0 font-mono text-[10px] text-faint tnum">
+        <span className="shrink-0 font-mono text-[10px] text-faint tnum sm:w-16">
           {d.done}/{d.steps ?? "?"} {d.final ? "" : "· running"}
         </span>
         <span className={`min-w-0 flex-1 font-mono tnum ${col(d.simPnl)}`}>
@@ -243,14 +255,14 @@ function ReplayDay({ d }: { d: AiReplayDay }) {
               <li key={st.id}>
                 <button
                   onClick={() => toggle(st.id)}
-                  className="flex w-full items-start gap-2 px-2.5 py-1.5 text-left text-xs hover:bg-surface2/60"
+                  className="flex w-full flex-wrap items-start gap-x-2 gap-y-0.5 px-2.5 py-1.5 text-left text-xs hover:bg-surface2/60"
                 >
-                  <span className="w-10 shrink-0 font-mono text-[11px] text-text tnum">{st.at ?? "—"}</span>
-                  <span className="w-16 shrink-0 font-mono text-[10px] uppercase text-faint">{st.phase ?? "—"}</span>
-                  <span className="min-w-0 flex-1 truncate text-dim">
+                  <span className="shrink-0 font-mono text-[11px] text-text tnum sm:w-10">{st.at ?? "—"}</span>
+                  <span className="shrink-0 text-[11px] text-faint sm:w-36">{phaseName(st.phase)}</span>
+                  <span className="order-last min-w-0 basis-full text-dim sm:order-none sm:basis-0 sm:flex-1 sm:truncate">
                     {st.error ? <span className="text-loss">{st.error}</span> : st.reason ?? ""}
                   </span>
-                  <span className="shrink-0 font-mono text-[10px] text-faint tnum">
+                  <span className="ml-auto shrink-0 font-mono text-[10px] text-faint tnum">
                     {st.step != null && `#${st.step} `}
                     {st.cost != null && `$${st.cost.toFixed(2)}`}
                   </span>
@@ -302,6 +314,7 @@ function NoteItem({ n, over, onRemoved }: { n: AiNote; over: boolean; onRemoved:
         {err && <p className="mt-1 text-xs text-loss">{err}</p>}
       </div>
       <button
+        type="button"
         onClick={remove}
         disabled={busy}
         className="shrink-0 rounded-md border border-border px-2 py-1 text-[11px] font-medium text-dim hover:border-loss/40 hover:text-loss disabled:opacity-50"
@@ -313,7 +326,7 @@ function NoteItem({ n, over, onRemoved }: { n: AiNote; over: boolean; onRemoved:
 }
 
 /** The active notes (ai_notes) the Mac writes into the book's lessons file before Claude's next run. */
-function ReadsNext({ notes, use, count }: { notes: AiNote[]; use: boolean; count: number }) {
+export function ReadsNext({ notes, use, count }: { notes: AiNote[]; use: boolean; count: number }) {
   // Hide a removed note at once; the refreshed page data drops it for good.
   const [gone, setGone] = useState<string[]>([]);
   const active = notes.filter((n) => !gone.includes(n.id));
@@ -333,7 +346,7 @@ function ReadsNext({ notes, use, count }: { notes: AiNote[]; use: boolean; count
         <span className="font-display text-sm font-semibold text-text">What Claude reads next</span>
         {use && active.length > 0 && <span className="text-[11px] text-faint">the newest {count} of each kind</span>}
       </div>
-      {!use && <p className="mb-1 text-xs text-watch">Off in Limits &amp; settings — Claude reads none of these.</p>}
+      {!use && <p className="mb-1 text-xs text-watch">&quot;Claude reads its lessons &amp; suggestions&quot; is off above — Claude reads none of these.</p>}
       {!active.length ? (
         <p className="py-2 text-sm text-dim">No lessons yet.</p>
       ) : (
@@ -348,8 +361,8 @@ function ReadsNext({ notes, use, count }: { notes: AiNote[]; use: boolean; count
             <div className="mt-3">
               <div className={LABEL}>Suggestions for you ({suggestions.length})</div>
               <p className="mt-0.5 text-[11px] leading-snug text-faint">
-                Setting changes the review proposes; the decision is yours. Change it in Limits &amp; settings if you agree —
-                Claude never acts against a setting.
+                Setting changes the review proposes; the decision is yours. Change the setting in this box&apos;s Settings if
+                you agree — Claude never acts against a setting.
               </p>
               {list(suggestions)}
             </div>
@@ -361,16 +374,25 @@ function ReadsNext({ notes, use, count }: { notes: AiNote[]; use: boolean; count
 }
 
 /** The Mac's after-close reviews (bin/reviewer.py → ai_reviews), newest day first, under the notes Claude reads next. */
-function DailyReviews({ reviews, notes, settings }: { reviews: AiReview[]; notes: AiNote[]; settings: AiBookView["settings"] }) {
-  const [all, setAll] = useState(false);
+/** Whether Claude reads lessons, and how many of each kind (the box's saved settings). */
+function lessonUse(settings: AiBookView["settings"]) {
   const cfg = effective(CLAUDE_LIMITS, settings);
   const use = cfg.use_lessons !== false && cfg.use_lessons !== "false";
   const want = Number(cfg.lessons_count);
-  const count = Number.isFinite(want) && want >= 0 ? Math.floor(want) : 8;
+  return { use, count: Number.isFinite(want) && want >= 0 ? Math.floor(want) : 8 };
+}
+
+function DailyReviews({ reviews, notes, onLessons }: { reviews: AiReview[]; notes: AiNote[]; onLessons: () => void }) {
+  const [all, setAll] = useState(false);
   const shown = all ? reviews : reviews.slice(0, 1);
   return (
-    <Block title="Daily review" hint="written after the close; you decide which notes Claude keeps">
-      <ReadsNext notes={notes} use={use} count={count} />
+    <Block title="Daily review" hint="written after the close">
+      <p className="mb-3 text-xs text-dim">
+        {notes.length} lesson{notes.length === 1 ? "" : "s"} and suggestion{notes.length === 1 ? "" : "s"} Claude reads next —{" "}
+        <button type="button" onClick={onLessons} className="font-medium text-accent hover:underline">
+          see or remove them in Settings → Learning
+        </button>
+      </p>
       {!reviews.length ? (
         <Empty>No review yet. After each trading day&apos;s close the Mac writes one here.</Empty>
       ) : (
@@ -389,7 +411,7 @@ function DailyReviews({ reviews, notes, settings }: { reviews: AiReview[]; notes
                     {s.trades != null && `${s.trades} trade${s.trades === 1 ? "" : "s"}`}
                     {s.wins != null && s.trades ? ` · ${s.wins} won` : ""}
                     {s.pnl != null && <span className={col(s.pnl)}> · {moneySigned(s.pnl, 2)}</span>}
-                    {s.avg_r != null && ` · avg ${s.avg_r.toFixed(2)}R`}
+                    {s.avg_r != null && ` · avg ${s.avg_r.toFixed(2)}× the risk`}
                   </span>
                 </div>
                 {r.summary && <p className="text-sm leading-relaxed text-text">{r.summary}</p>}
@@ -433,7 +455,7 @@ function DailyReviews({ reviews, notes, settings }: { reviews: AiReview[]; notes
   );
 }
 
-const signedR = (r: number) => `${r < 0 ? "−" : "+"}${Math.abs(r).toFixed(1)}R`;
+const signedR = (r: number) => `${r < 0 ? "−" : "+"}${Math.abs(r).toFixed(1)}× the risk`;
 const DIR_WORD = { long: "bought", short: "sold short" } as const;
 
 /** One closed trade of the day: symbol, direction, result $, and how it did against the market. */
@@ -510,6 +532,15 @@ function ShadowRow({ it }: { it: AiShadowItem }) {
   );
 }
 
+/** Per check, the newest review's verdict on the stocks it kept out (for Settings → Checks). */
+export function latestGateVerdicts(reviews: AiReview[]): { day: string; byGate: Record<string, AiReviewShadow["by_gate"][number]> } | null {
+  for (const r of reviews) {
+    const by = r.stats?.shadow?.by_gate;
+    if (Array.isArray(by) && by.length) return { day: r.day, byGate: Object.fromEntries(by.map((g) => [g.gate, g])) };
+  }
+  return null;
+}
+
 /** What the stocks Claude passed on did after it passed (stats.shadow), overall and per scorecard check. */
 function TradesNotTaken({ sh }: { sh: AiReviewShadow }) {
   return (
@@ -523,7 +554,7 @@ function TradesNotTaken({ sh }: { sh: AiReviewShadow }) {
         <>
           <p className="mt-2 text-[11px] leading-snug text-faint">
             Per scorecard check: the stocks it kept out, and what they did. A check helped when it kept out more losers than
-            winners. R = the planned risk per trade (−1R = the stop was hit).
+            winners. −1× the risk = the stop would have been hit.
           </p>
           <ul className="mt-1 divide-y divide-border">
             {sh.by_gate.map((g) => {
@@ -572,7 +603,14 @@ function reviewDay(day: string): string {
 
 /** Claude replays of past days (simulated on the Mac; never in this box's ledger). */
 function Replays({ days }: { days: AiReplayDay[] }) {
-  if (!days.length) return null;
+  if (!days.length) {
+    return (
+      <div>
+        <div className={`mb-1 ${LABEL}`}>Replays</div>
+        <Empty>No replays yet. A replay re-runs Claude on a past day with simulated fills; start one on the Mac.</Empty>
+      </div>
+    );
+  }
   return (
     <div>
       <div className={`mb-1 ${LABEL}`}>Replays ({days.length})</div>
@@ -682,8 +720,6 @@ function ClosedTrades({ trades }: { trades: ClosedTrade[] }) {
   );
 }
 
-type Section = "now" | "trades" | "runs" | "settings";
-
 /** Where the price sits between the stop and the target (0 = at the stop, 1 = at the target). */
 function stopTargetPos(p: AiBookView["positions"][number]): number | null {
   if (p.stop == null || p.target == null || p.price == null || p.target === p.stop) return null;
@@ -778,21 +814,109 @@ function Block({ title, hint, children }: { title: string; hint?: string; childr
   );
 }
 
-export function BookCard({ b }: { b: AiBookView }) {
+/** Run both Rules boxes now, or a dry run (decisions only). */
+function RulesRunButtons() {
+  const [msg, setMsg] = useState<{ text: string; err?: boolean } | null>(null);
+  const [busy, start] = useTransition();
+  const router = useRouter();
+  function go(mode: "manual" | "dry") {
+    if (mode === "manual" && !confirm("Run both Rules boxes now? They will place PAPER orders (simulated money).")) return;
+    setMsg(null);
+    start(async () => {
+      try {
+        const r = await runAiTrader(mode);
+        setMsg("error" in r ? { text: r.error, err: true } : { text: r.message });
+      } catch (e) {
+        setMsg({ text: e instanceof Error ? e.message : String(e), err: true });
+      }
+      router.refresh();
+    });
+  }
+  return (
+    <div className="rounded-xl border border-border p-3">
+      <p className="text-xs leading-snug text-dim">
+        Rules boxes run by themselves on weekday schedules. Run them now, or do a dry run that only shows what they would do.
+        Both buttons run both Rules boxes.
+      </p>
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          onClick={() => go("dry")}
+          disabled={busy}
+          className="rounded-lg border border-border bg-surface px-3 py-1.5 text-sm text-dim hover:bg-surface2 hover:text-text disabled:opacity-60"
+        >
+          Dry run
+        </button>
+        <button
+          type="button"
+          onClick={() => go("manual")}
+          disabled={busy}
+          className="rounded-lg bg-accent px-3 py-1.5 text-sm font-semibold text-bg hover:brightness-110 disabled:opacity-60"
+        >
+          {busy ? "Running…" : "Run now"}
+        </button>
+      </div>
+      {msg && <p className={`mt-2 text-xs ${msg.err ? "text-loss" : "text-dim"}`}>{msg.text}</p>}
+    </div>
+  );
+}
+
+const VERDICT_WORD = { helped: "helped", "cost you": "cost you", even: "about even" } as const;
+
+/** A check's verdict from the newest daily review, shown under it in Settings → Checks. */
+function GateVerdict({ day, g }: { day: string; g: AiReviewShadow["by_gate"][number] }) {
+  const v = gateVerdict(g);
+  return (
+    <p className="mt-1 rounded-md bg-surface2/60 px-2 py-1 text-xs leading-snug text-dim">
+      Review of {shortDay(day)}: kept out {g.n} — {g.would_win} would have won, {g.would_lose} would have lost.{" "}
+      <span className={`font-semibold ${VERDICT_CLS[v]}`}>It {VERDICT_WORD[v]}.</span>
+    </p>
+  );
+}
+
+/** "2:30 PM": about when the next check runs (latest run + the runner's interval), if still ahead. */
+function nextCheck(lastRunAt: string | null | undefined, runner: Record<string, LimitValue>, now: number): string | null {
+  if (!lastRunAt) return null;
+  const every = Number(effective(RUNNER_LIMITS, runner).interval_min) || 0;
+  const t = new Date(lastRunAt).getTime() + every * 60_000;
+  if (!every || !Number.isFinite(t) || t <= now) return null;
+  return new Date(t).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+}
+
+type Section = "now" | "trades" | "why" | "history" | "settings";
+
+export function BookCard({
+  b,
+  runner,
+  weekCost,
+  initialSection,
+  initialGroup,
+}: {
+  b: AiBookView;
+  runner: Record<string, LimitValue>;
+  /** This week's Claude usage, both Claude boxes together. */
+  weekCost: number;
+  initialSection?: Section;
+  initialGroup?: SettingsSection;
+}) {
   const isClaude = b.key.startsWith("claude-");
   const run = b.lastRun;
   const defs = defsForBook(b.key);
-  const [section, setSection] = useState<Section>("now");
+  const [section, setSection] = useState<Section>(initialSection ?? "now");
+  const [group, setGroup] = useState<SettingsSection | undefined>(initialGroup);
+  const [now] = useState(() => Date.now());
   // A Rules box's size is its start_cash; show the real one when no budget is saved.
   const saved = isClaude ? b.settings : { budget: b.startCash, ...b.settings };
+  const budget = Number(effective(defs, saved).budget) || b.startCash;
   const decided = b.wins + b.losses;
   const closedToday = b.todayTrades.filter((t) => t.pnl != null);
   const todayPnl = closedToday.reduce((a, t) => a + (t.pnl ?? 0), 0);
   const openPnl = b.positions.reduce((a, p) => a + (p.pnl ?? 0), 0);
   const entriesWaiting = b.pending.filter((o) => o.kind === "entry").length;
+  const next = isClaude ? nextCheck(run?.ran_at, runner, now) : null;
 
   const status = [
-    b.positions.length ? `Holding ${b.positions.length} stock${b.positions.length === 1 ? "" : "s"}` : "No open positions",
+    b.positions.length ? `Holding ${b.positions.length} stock${b.positions.length === 1 ? "" : "s"}` : "Nothing open",
     closedToday.length ? `${closedToday.length} closed today, ${moneySigned(todayPnl, 2)}` : null,
     entriesWaiting ? `${entriesWaiting} order${entriesWaiting === 1 ? "" : "s"} waiting to fill` : null,
   ]
@@ -802,12 +926,38 @@ export function BookCard({ b }: { b: AiBookView }) {
   const tabs: { key: Section; label: string; count?: number }[] = [
     { key: "now", label: "Now", count: b.positions.length + b.pending.length || undefined },
     { key: "trades", label: "Trades", count: b.closed.length || undefined },
-    { key: "runs", label: isClaude ? "Claude's runs" : "Runs", count: isClaude ? b.today.length || undefined : undefined },
-    { key: "settings", label: "Limits & settings" },
+    { key: "why", label: isClaude ? "Why & review" : "Latest run" },
+    ...(isClaude ? [{ key: "history" as Section, label: "History", count: b.today.length || undefined }] : []),
+    { key: "settings", label: "Settings" },
   ];
+
+  const openSettings = (g: SettingsSection) => {
+    setGroup(g);
+    setSection("settings");
+  };
+
+  const verdicts = isClaude ? latestGateVerdicts(b.reviews) : null;
+  const fieldExtras: Record<string, ReactNode> = {};
+  if (verdicts) {
+    for (const [gate, g] of Object.entries(verdicts.byGate)) fieldExtras[`gate_${gate}`] = <GateVerdict day={verdicts.day} g={g} />;
+  }
+  const lessons = lessonUse(b.settings);
 
   return (
     <div className="card rounded-2xl border border-border bg-surface">
+      {/* ---------- what Claude is doing now (first thing on a Claude box) ---------- */}
+      {isClaude && (
+        <div className="border-b border-border p-5 md:p-6">
+          <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
+            <h3 className="font-display text-sm font-semibold text-text">What Claude is doing now</h3>
+            {next && <span className="text-[11px] text-faint">next check about {next}</span>}
+          </div>
+          <div className="rounded-xl border border-border bg-surface2/40 p-4">
+            <ClaudePlan run={run} />
+          </div>
+        </div>
+      )}
+
       {/* ---------- statement header ---------- */}
       <header className="p-5 md:p-6">
         <div className="flex items-start justify-between gap-4">
@@ -835,8 +985,18 @@ export function BookCard({ b }: { b: AiBookView }) {
               {moneySigned(b.pnl, 2)} ({pct(b.pnlPct)}) all time
             </div>
           </div>
-          <Stat label="Today (closed)" value={closedToday.length ? moneySigned(todayPnl, 2) : "—"} tone={closedToday.length ? todayPnl : null} />
-          <Stat label="Open positions" value={b.positions.length ? moneySigned(openPnl, 2) : "—"} tone={b.positions.length ? openPnl : null} sub={`${money(b.cash, 2)} cash`} />
+          <Stat
+            label="Today (closed)"
+            value={closedToday.length ? moneySigned(todayPnl, 2) : "—"}
+            tone={closedToday.length ? todayPnl : null}
+            sub="closed trades only; open trades not included"
+          />
+          <Stat
+            label="Open trades (unrealised)"
+            value={b.positions.length ? moneySigned(openPnl, 2) : "—"}
+            tone={b.positions.length ? openPnl : null}
+            sub={`${money(b.cash, 2)} cash`}
+          />
           <Stat
             label="Win rate"
             value={decided ? `${Math.round((b.wins / decided) * 100)}%` : "—"}
@@ -847,8 +1007,8 @@ export function BookCard({ b }: { b: AiBookView }) {
         <p className="mt-4 rounded-lg bg-surface2/70 px-3 py-2 text-xs text-dim">{status}</p>
       </header>
 
-      {/* ---------- section switcher (sticks while scrolling) ---------- */}
-      <nav className="sticky top-0 z-10 border-y border-border bg-surface/90 px-3 backdrop-blur md:px-5" aria-label={`${b.name} sections`}>
+      {/* ---------- section switcher (not sticky: the page's own tab bar already sticks at the top) ---------- */}
+      <nav className="border-y border-border bg-surface px-3 md:px-5" aria-label={`${b.name} sections`}>
         <div className="-mb-px flex gap-1 overflow-x-auto">
           {tabs.map((t) => {
             const on = section === t.key;
@@ -872,14 +1032,6 @@ export function BookCard({ b }: { b: AiBookView }) {
       <div className="space-y-7 p-5 md:p-6">
         {section === "now" && (
           <>
-            {isClaude && (
-              <Block title="What Claude is doing">
-                <div className="rounded-xl border border-border bg-surface2/40 p-4">
-                  <ClaudePlan run={run} />
-                </div>
-              </Block>
-            )}
-
             <Block title="Open positions" hint={b.positions.length ? "dot = price now · line = your entry" : undefined}>
               {b.positions.length === 0 ? (
                 <Empty>Nothing open right now.</Empty>
@@ -905,9 +1057,9 @@ export function BookCard({ b }: { b: AiBookView }) {
                         <span className="font-display font-semibold text-text">{o.symbol}</span>
                         <span className="block font-mono text-[11px] text-faint tnum">
                           {o.limit != null && `limit $${fprice(o.limit)} · `}
-                          {o.stop != null && `stop ${fprice(o.stop)} · `}
-                          {o.target != null && `target ${fprice(o.target)} · `}
-                          {o.kind === "entry" ? "waiting to fill" : o.stop != null ? "protective stop" : "exit queued"}
+                          {o.stop != null && `stop $${fprice(o.stop)} · `}
+                          {o.target != null && `target $${fprice(o.target)} · `}
+                          {o.kind === "entry" ? "waiting to fill" : o.stop != null ? "protective stop" : "sell queued"}
                         </span>
                       </span>
                       <span className="shrink-0 font-mono text-[11px] text-faint tnum">{when(o.created_at)}</span>
@@ -916,6 +1068,12 @@ export function BookCard({ b }: { b: AiBookView }) {
                 </ul>
               </Block>
             )}
+
+            <Block title={`Limits used${isClaude ? " today" : ""}`}>
+              <div className="rounded-xl border border-border p-4">
+                <LimitsUsed b={b} />
+              </div>
+            </Block>
           </>
         )}
 
@@ -955,42 +1113,55 @@ export function BookCard({ b }: { b: AiBookView }) {
           </>
         )}
 
-        {section === "runs" && (
+        {section === "why" && (
           <>
-            <Block title="Latest run" hint={run ? `${when(run.ran_at)} · ${run.mode}` : "not run yet"}>
+            <Block title={isClaude ? "Latest check, step by step" : "Latest run"} hint={run ? `${when(run.ran_at)} · ${run.mode}` : "not run yet"}>
               {run ? (
                 <div className="rounded-xl border border-border bg-surface2/30 p-4">
                   <RunDetail s={run.summary} error={run.error} mode={run.mode} />
                 </div>
               ) : (
-                <Empty>This box hasn&apos;t run yet.</Empty>
+                <Empty>
+                  {isClaude
+                    ? `Claude hasn't run in this box yet${next ? `; next check about ${next}` : ""}.`
+                    : "This box hasn't run yet. Rules boxes run on weekday schedules, or use Run now in Settings → Schedule & cost."}
+                </Empty>
               )}
             </Block>
-            {isClaude && <DailyReviews reviews={b.reviews} notes={b.notes} settings={b.settings} />}
-            {isClaude && <Timeline runs={b.today} latestId={run?.id ?? null} />}
-            {isClaude && <Replays days={b.replays} />}
-            {!isClaude && <BacktestPanel bookKey={b.key} />}
+            {isClaude && <DailyReviews reviews={b.reviews} notes={b.notes} onLessons={() => openSettings("Learning")} />}
+          </>
+        )}
+
+        {section === "history" && isClaude && (
+          <>
+            <Timeline runs={b.today} latestId={run?.id ?? null} next={next} />
+            <Replays days={b.replays} />
           </>
         )}
 
         {section === "settings" && (
-          <>
-            <Block title={`Limits used${isClaude ? " today" : ""}`}>
-              <div className="rounded-xl border border-border p-4">
-                <LimitsUsed b={b} />
-              </div>
-            </Block>
-            <LimitsEditor
-              bookKey={b.key}
-              defs={defs}
-              saved={saved}
-              note={
-                isClaude
-                  ? "These are the repo's own trader/config.json limits. The Mac writes them into this book before every Claude run, and the repo's risk check blocks anything that breaks them."
-                  : "Used by the rules engine from its next run. Book size sets this box's starting cash."
-              }
-            />
-          </>
+          <BoxSettings
+            key={b.key}
+            bookKey={b.key}
+            claude={isClaude}
+            defs={defs}
+            saved={saved}
+            budget={budget}
+            initialSection={group}
+            fieldExtras={fieldExtras}
+            sectionExtras={isClaude ? { Learning: <ReadsNext notes={b.notes} use={lessons.use} count={lessons.count} /> } : undefined}
+            scheduleBadge={isClaude ? "shared by both Claude boxes" : undefined}
+            schedule={(current) =>
+              isClaude ? (
+                <RunnerSettings defs={RUNNER_LIMITS} saved={runner} weekCost={weekCost} />
+              ) : (
+                <div className="space-y-3">
+                  <RulesRunButtons />
+                  <BacktestPanel bookKey={b.key} getValues={current} />
+                </div>
+              )
+            }
+          />
         )}
       </div>
     </div>

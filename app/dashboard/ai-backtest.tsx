@@ -5,7 +5,6 @@ import { runBacktest } from "../actions";
 import { money, moneySigned, pct, price as fprice, shares } from "@/lib/portfolio";
 import { DEFAULT_PERIOD, PERIODS, type BacktestResult, type BacktestTrade, type Period } from "@/lib/aitrader/backtest";
 import { LABEL, col } from "./ai-run";
-import { formValues, limitsFormId } from "./ai-settings";
 
 type Outcome = { result: BacktestResult; period: Period; source: "saved" | "form" } | { error: string };
 
@@ -194,7 +193,7 @@ function Results({ out }: { out: Exclude<Outcome, { error: string }> }) {
   return (
     <div className="space-y-3">
       <p className="font-mono text-[11px] text-dim tnum">
-        {day(r.start)} – {day(r.end)} · {r.days} trading days · {out.source === "form" ? "unsaved form values" : "saved limits"} ·{" "}
+        {day(r.start)} – {day(r.end)} · {r.days} trading days · {out.source === "form" ? "current form values" : "saved settings"} ·{" "}
         {money(r.startCash)} start
       </p>
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
@@ -217,7 +216,7 @@ function Results({ out }: { out: Exclude<Outcome, { error: string }> }) {
       </div>
       {(r.haltedDays > 0 || r.expiredEntries > 0 || r.missing.length > 0) && (
         <p className="text-[11px] text-dim">
-          {r.haltedDays > 0 && `Daily-loss halt on ${r.haltedDays} day${r.haltedDays > 1 ? "s" : ""}. `}
+          {r.haltedDays > 0 && `Stopped buying after a bad day on ${r.haltedDays} day${r.haltedDays > 1 ? "s" : ""}. `}
           {r.expiredEntries > 0 && `${r.expiredEntries} entr${r.expiredEntries > 1 ? "ies" : "y"} expired unfilled. `}
           {r.missing.length > 0 && `No data for ${r.missing.slice(0, 8).join(", ")}${r.missing.length > 8 ? "…" : ""}.`}
         </p>
@@ -231,14 +230,13 @@ function Results({ out }: { out: Exclude<Outcome, { error: string }> }) {
   );
 }
 
-/** Collapsible backtest of a Rules box over daily bars. */
-export function BacktestPanel({ bookKey }: { bookKey: string }) {
+/** Backtest of a Rules box over daily bars. `getValues` = the settings form's current (unsaved) values. */
+export function BacktestPanel({ bookKey, getValues }: { bookKey: string; getValues?: () => Record<string, string> }) {
   const [period, setPeriod] = useState<Period>(DEFAULT_PERIOD);
   const [out, setOut] = useState<Outcome | null>(null);
   const [busy, start] = useTransition();
   function go(useForm: boolean) {
-    const form = useForm ? (document.getElementById(limitsFormId(bookKey)) as HTMLFormElement | null) : null;
-    const values = form ? formValues(form) : undefined;
+    const values = useForm && getValues ? { ...getValues() } : undefined;
     start(async () => {
       try {
         setOut(await runBacktest(bookKey, period, values));
@@ -248,7 +246,7 @@ export function BacktestPanel({ bookKey }: { bookKey: string }) {
     });
   }
   return (
-    <details className="rounded-lg border border-border">
+    <details open className="rounded-lg border border-border">
       <summary className="flex cursor-pointer items-center justify-between gap-2 px-3 py-2">
         <span className={LABEL}>Backtest</span>
         <span className="text-[11px] text-faint">replay these rules on past daily bars · free</span>
@@ -277,14 +275,16 @@ export function BacktestPanel({ bookKey }: { bookKey: string }) {
           >
             {busy ? "Running…" : "Run backtest"}
           </button>
+          {getValues && (
           <button
             onClick={() => go(true)}
             disabled={busy}
-            title="Uses the values currently in the Limits form above, saved or not"
+            title="Uses the values currently in this box's settings, saved or not"
             className="rounded-lg border border-border bg-surface px-3 py-1.5 text-sm text-dim hover:bg-surface2 hover:text-text disabled:opacity-60"
           >
             Try current form values
           </button>
+          )}
         </div>
         {out && "error" in out && <p className="rounded-md bg-loss/10 px-3 py-2 text-xs text-loss">{out.error}</p>}
         {out && "result" in out && <Results out={out} />}
