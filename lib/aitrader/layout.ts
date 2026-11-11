@@ -112,7 +112,8 @@ export function isAdvanced(d: LimitDef, claude: boolean): boolean {
 const HIDDEN = new Set(["sentiment", "w_sentiment"]);
 
 const on = (v: string | undefined) => v === "true";
-const num = (v: string | undefined) => Number(v);
+/** A number parent that is on (> 0). Empty = its default, which isn't known here, so it counts as on. */
+const pos = (v: string | undefined) => v === undefined || v.trim() === "" || Number(v) > 0;
 
 /** Fields that only matter while a parent field is set a certain way. vals: the form's current values. */
 const SHOW_IF: Record<string, (v: Record<string, string>) => boolean> = {
@@ -123,13 +124,13 @@ const SHOW_IF: Record<string, (v: Record<string, string>) => boolean> = {
   trail_start_r: (v) => v.trail_mode !== "off",
   trail_atr_mult: (v) => v.trail_mode === "atr",
   trail_pct: (v) => v.trail_mode === "pct",
-  partial_r: (v) => num(v.partial_pct) > 0,
+  partial_r: (v) => pos(v.partial_pct),
   time_stop_min: (v) => v.time_stop_mode !== "off",
-  time_stop_min_r: (v) => v.time_stop_mode !== "off" && num(v.time_stop_min) > 0,
+  time_stop_min_r: (v) => v.time_stop_mode !== "off" && pos(v.time_stop_min),
   market_turn_pct: (v) => v.market_turn_mode !== "off",
   lessons_count: (v) => on(v.use_lessons),
   review_model: (v) => on(v.review),
-  throttle_interval_min: (v) => num(v.throttle_pct) > 0 && num(v.weekly_cap_usd) > 0,
+  throttle_interval_min: (v) => pos(v.throttle_pct) && pos(v.weekly_cap_usd),
   wake_min_gap_min: (v) => on(v.news_wake),
   news_tags: (v) => on(v.news_wake),
 };

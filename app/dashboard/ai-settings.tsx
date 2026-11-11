@@ -336,19 +336,22 @@ export function BoxSettings({
 
   const sorted = sortDefs(defs);
   const bySection = (s: SettingsSection) => sorted.filter((d) => sectionOf(d) === s);
-  const changed = defs.filter((d) => !isDefault(d, vals[d.key]));
-  const changedIn = (s: SettingsSection) => bySection(s).filter((d) => !isDefault(d, vals[d.key])).length;
+  // Only fields that are shown count as changes (a hidden child keeps its value but can't be seen or reverted).
+  const isChanged = (d: LimitDef) => isShown(d, vals) && !isDefault(d, vals[d.key]);
+  const changed = defs.filter(isChanged);
+  const changedIn = (s: SettingsSection) => bySection(s).filter(isChanged).length;
   const unsaved = defs.some((d) => (vals[d.key] ?? "") !== (base[d.key] ?? ""));
   const preset = matchPreset(defs, claude, (d, v) => {
-    const s = vals[d.key];
-    return s !== undefined && isDefault({ ...d, def: v }, s);
+    const s0 = vals[d.key];
+    if (s0 === undefined) return false;
+    // An emptied field means the field's default, not "anything".
+    const s = s0.trim() === "" ? toForm(d, d.def) : s0;
+    return isDefault({ ...d, def: v }, s);
   });
-  const [picked, setPicked] = useState<PresetId | null>(null);
 
   function applyPreset(id: PresetId) {
     const v = presetValues(defs, id, claude);
     setVals((p) => ({ ...p, ...Object.fromEntries(Object.entries(v).map(([k, x]) => [k, toForm(defs.find((d) => d.key === k)!, x)])) }));
-    setPicked(id);
     setMsg({ text: `${PRESETS.find((p) => p.id === id)?.name} filled in. Nothing is saved until you press Save.` });
   }
 
@@ -366,7 +369,6 @@ export function BoxSettings({
         const fresh = initVals(defs, { budget: size });
         setVals(fresh);
         setBase(fresh);
-        setPicked(null);
       }
     );
   }
@@ -421,7 +423,7 @@ export function BoxSettings({
             </span>
           </div>
           <p className="mt-1.5 text-xs leading-snug text-dim">
-            {PRESETS.find((p) => p.id === (picked ?? (preset === "custom" ? null : preset)))?.blurb ??
+            {PRESETS.find((p) => p.id === preset)?.blurb ??
               "Your own mix. Pick a starting point to fill the form; nothing is saved until Save."}{" "}
             Presets never turn on short selling or borrowing, and never change the box size.
           </p>
