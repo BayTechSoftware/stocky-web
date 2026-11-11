@@ -13,7 +13,7 @@ export function col(v: number | null | undefined) {
   return v > 0 ? "text-gain" : "text-loss";
 }
 
-/** The repo's chain, in the order it runs. */
+/** The steps of one Claude check, in the order they run. */
 const STAGES: { key: string; name: string }[] = [
   { key: "scanner", name: "Scanner" },
   { key: "news", name: "News" },
@@ -86,10 +86,10 @@ const BEAR_CLS: Record<Bear["verdict"], string> = {
 };
 
 const BEAR_TITLE: Record<Bear["verdict"], string> = {
-  against: "Bear check: a separate Claude call made a strong case against this trade",
-  mixed: "Bear check: the case against this trade is so-so",
-  weak: "Bear check: the case against this trade is weak",
-  unavailable: "Bear check: it couldn't run this time",
+  against: "Second opinion: a separate Claude call made a strong case against this trade",
+  mixed: "Second opinion: the case against this trade is so-so",
+  weak: "Second opinion: the case against this trade is weak",
+  unavailable: "Second opinion: it couldn't run this time",
 };
 
 /** The bear check's verdict as a small chip: "Bear: against 80%". */
@@ -100,7 +100,7 @@ export function BearChip({ bear }: { bear: Bear }) {
       title={BEAR_TITLE[bear.verdict]}
       className={`h-fit shrink-0 rounded px-1.5 py-0.5 font-mono text-[10px] font-bold tnum ring-1 ring-inset ${BEAR_CLS[bear.verdict]}`}
     >
-      Bear: {bear.verdict}
+      Second opinion: {bear.verdict}
       {conf}
     </span>
   );
@@ -162,7 +162,7 @@ export function ScorecardView({ card, bear }: { card: DecisionScorecard; bear?: 
         )}
         {card.penalty?.extension ? (
           <p className="text-[11px] text-watch">
-            Extended — a chase: −{card.penalty.extension} points. A pullback to VWAP is the better entry.
+            Chasing — it already ran: −{card.penalty.extension} points. Waiting for a dip back to today&apos;s average price is the better buy.
           </p>
         ) : null}
         {card.why && <p className="text-[11px] text-text">Claude: {card.why}</p>}
@@ -172,15 +172,15 @@ export function ScorecardView({ card, bear }: { card: DecisionScorecard; bear?: 
             {gates.map((g) => {
               const tone = GATE_ICON[gateTone(g)];
               return (
-                <li key={g.k} className={`flex gap-2 text-[11px] ${g.m === "off" ? "opacity-50" : ""}`}>
+                <li key={g.k} className={`flex flex-wrap gap-x-2 text-[11px] ${g.m === "off" ? "opacity-50" : ""}`}>
                   <span className={`w-3 shrink-0 text-center font-bold ${tone.cls}`} aria-label={tone.word}>
                     {tone.icon}
                   </span>
-                  <span className="w-[150px] shrink-0 text-dim">
+                  <span className="min-w-0 text-dim sm:w-[150px] sm:shrink-0">
                     {SCORECARD_GATE_LABEL[g.k] ?? g.k}
-                    {g.m === "block" && <span className="ml-1 text-[9px] uppercase tracking-wide text-faint">block</span>}
+                    {g.m === "block" && <span className="ml-1 text-[9px] uppercase tracking-wide text-faint">stops trade</span>}
                   </span>
-                  <span className="min-w-0 font-mono text-[10.5px] text-text tnum">{g.v || "—"}</span>
+                  <span className="min-w-0 basis-full pl-5 font-mono text-[10.5px] text-text tnum sm:basis-auto sm:pl-0">{g.v || "—"}</span>
                 </li>
               );
             })}
@@ -221,7 +221,7 @@ function verdictTone(s: PipelineStep): string {
 /** Claude records 0 for "not decided yet": never show those as numbers. */
 const pos = (v: number | null | undefined) => typeof v === "number" && v > 0;
 
-const PHASE: Record<string, string> = {
+export const PHASE: Record<string, string> = {
   PRE: "Before the open",
   OPEN: "Market just opened",
   ENTRY: "Looking for trades",
@@ -229,6 +229,18 @@ const PHASE: Record<string, string> = {
   FLATTEN: "Closing everything for the day",
   CLOSED: "Market closed",
 };
+
+/** A run's phase code (PRE, ENTRY, …) in plain words. */
+export const phaseName = (code: string | null | undefined) => (code ? PHASE[code.toUpperCase()] ?? code.toLowerCase() : "—");
+
+/** One line for "what Claude is doing now": phase + Claude's own note, or null when it hasn't run. */
+export function claudeNowLine(run: { summary: RunSummary | null; error: string | null } | null): string | null {
+  if (!run) return null;
+  if (run.error) return `Last check failed: ${run.error}`;
+  const s = run.summary;
+  const phase = PHASE[s?.phase ?? ""] ?? "Latest check";
+  return s?.note ? `${phase}: ${s.note}` : phase;
+}
 
 const GROUPS: { title: string; actions: Decision["action"][]; tone: string }[] = [
   { title: "Buying", actions: ["buy"], tone: "text-gain" },
@@ -273,7 +285,7 @@ export function ClaudePlan({
 }) {
   if (!run) return <p className="text-sm text-dim">Claude hasn&apos;t run yet.</p>;
   const s = run.summary;
-  const ds = s?.decisions ?? [];
+  const ds: Decision[] = Array.isArray(s?.decisions) ? s.decisions : [];
   return (
     <div>
       <div className="flex flex-wrap items-baseline justify-between gap-2">
@@ -346,8 +358,8 @@ export function Decisions({ decisions, limit }: { decisions: Decision[]; limit?:
               {pos(d.stop) && (
                 <span className="font-mono text-faint tnum">
                   {" "}
-                  (stop {fprice(d.stop!)}
-                  {pos(d.target) ? ` / target ${fprice(d.target!)}` : ""})
+                  (stop ${fprice(d.stop!)}
+                  {pos(d.target) ? ` / target $${fprice(d.target!)}` : ""})
                 </span>
               )}
               <span className="text-dim"> — {d.reason}</span>
@@ -394,8 +406,8 @@ export function Pipeline({ steps }: { steps: PipelineStep[] }) {
               .map((s, i) => (
                 <li key={i}>
                   <details className="group">
-                    <summary className="flex cursor-pointer list-none items-start gap-2 text-xs">
-                      <span className="w-[86px] shrink-0 pt-0.5 text-[10px] font-semibold uppercase tracking-wider text-faint">
+                    <summary className="flex cursor-pointer list-none flex-wrap items-start gap-x-2 gap-y-0.5 text-xs">
+                      <span className="shrink-0 sm:w-[86px] pt-0.5 text-[10px] font-semibold uppercase tracking-wider text-faint">
                         {stageName(s.stage)}
                       </span>
                       {s.verdict && (
@@ -405,10 +417,10 @@ export function Pipeline({ steps }: { steps: PipelineStep[] }) {
                           {s.verdict}
                         </span>
                       )}
-                      <span className="min-w-0 text-dim">{s.summary}</span>
+                      <span className="min-w-0 basis-full text-dim sm:basis-0 sm:flex-1">{s.summary}</span>
                     </summary>
                     {s.data && Object.keys(s.data).length > 0 && (
-                      <dl className="ml-[94px] mt-1 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 rounded-md bg-surface2/60 p-2 font-mono text-[11px] tnum">
+                      <dl className="mt-1 grid sm:ml-[94px] grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 rounded-md bg-surface2/60 p-2 font-mono text-[11px] tnum">
                         {Object.entries(s.data).map(([k, v]) => (
                           <div key={k} className="contents">
                             <dt className="text-faint">{k}</dt>
@@ -467,15 +479,15 @@ export function Trace({ trace }: { trace: TraceItem[] }) {
 
 /** Everything about one run: header, decisions, pipeline per candidate, trace, guard blocks. */
 export function RunDetail({ s, error, mode }: { s: RunSummary | null; error: string | null; mode: string }) {
-  const decisions = s?.decisions ?? [];
-  const steps = s?.steps ?? [];
-  const trace = s?.trace ?? [];
-  const blocks = s?.guard_blocks ?? [];
+  const decisions: Decision[] = Array.isArray(s?.decisions) ? s.decisions : [];
+  const steps: PipelineStep[] = Array.isArray(s?.steps) ? s.steps : [];
+  const trace: TraceItem[] = Array.isArray(s?.trace) ? s.trace : [];
+  const blocks = Array.isArray(s?.guard_blocks) ? s.guard_blocks : [];
   const u = s?.usage;
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap gap-x-3 gap-y-1 font-mono text-[11px] text-dim tnum">
-        {s?.phase && <span className="font-semibold text-text">{s.phase}</span>}
+        {s?.phase && <span className="font-sans font-semibold text-text">{phaseName(s.phase)}</span>}
         {s?.reason && <span>woke: {s.reason}</span>}
         {u?.secs != null && <span>{Math.round(u.secs)}s</span>}
         {u?.turns != null && <span>{u.turns} turns</span>}
@@ -504,14 +516,14 @@ export function RunDetail({ s, error, mode }: { s: RunSummary | null; error: str
 
       {steps.length > 0 && (
         <div>
-          <div className={`mb-1 ${LABEL}`}>Repo pipeline, per candidate</div>
+          <div className={`mb-1 ${LABEL}`}>Step by step, per stock</div>
           <Pipeline steps={steps} />
         </div>
       )}
 
       {blocks.length > 0 && (
         <div>
-          <div className={`mb-1 ${LABEL}`}>Guard blocks ({blocks.length})</div>
+          <div className={`mb-1 ${LABEL}`}>Stopped by the safety check ({blocks.length})</div>
           <ul className="space-y-0.5">
             {blocks.map((b, i) => (
               <li key={i} className="font-mono text-[11px] text-loss">
