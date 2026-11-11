@@ -395,14 +395,14 @@ export function validateLimits(
   if (has("min_stop_pct") && has("max_stop_pct")) {
     const lo = Number(val("min_stop_pct"));
     const hi = Number(val("max_stop_pct"));
-    if (lo > hi) errors.push("Min stop distance must be ≤ Max stop distance");
+    if (lo > hi) errors.push("\"Stop at least this far\" must not be more than \"Stop at most this far\"");
   }
 
   // Time order: before < after < flat_by, over the ones that are set (not off).
   const order = [
-    ["no_entries_before", "No entries before"],
-    ["no_entries_after", "No entries after"],
-    ["flat_by", "Flat by"],
+    ["no_entries_before", "Start buying at"],
+    ["no_entries_after", "Stop buying at"],
+    ["flat_by", "Sell everything by"],
   ].filter(([k]) => has(k));
   const set = order
     .map(([k, label]) => ({ label, t: val(k) }))
