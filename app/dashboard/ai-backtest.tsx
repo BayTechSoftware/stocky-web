@@ -290,7 +290,7 @@ export function BacktestPanel({ bookKey, getValues }: { bookKey: string; getValu
         {out && "result" in out && <Results out={out} />}
         <p className="text-[10.5px] leading-relaxed text-faint">
           Simulated on daily bars (Alpaca IEX feed, split-adjusted) with the live engine&apos;s own rules — not real
-          fills. One decision run per day after the close (the live book also runs mid-morning); entries fill next
+          fills. One decision run per day after the close (the live box also runs mid-morning); entries fill next
           day at the open or the limit; when a bar touches both stop and target the stop is assumed first; a gap
           through a stop fills at the open; legs don&apos;t trigger on the fill day itself. My List signals are
           recomputed from these bars for your current list (so names you added later are in the past too). Whole

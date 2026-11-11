@@ -86,10 +86,10 @@ const BEAR_CLS: Record<Bear["verdict"], string> = {
 };
 
 const BEAR_TITLE: Record<Bear["verdict"], string> = {
-  against: "Bear check: a separate Claude call made a strong case against this trade",
-  mixed: "Bear check: the case against this trade is so-so",
-  weak: "Bear check: the case against this trade is weak",
-  unavailable: "Bear check: it couldn't run this time",
+  against: "Second opinion: a separate Claude call made a strong case against this trade",
+  mixed: "Second opinion: the case against this trade is so-so",
+  weak: "Second opinion: the case against this trade is weak",
+  unavailable: "Second opinion: it couldn't run this time",
 };
 
 /** The bear check's verdict as a small chip: "Bear: against 80%". */
@@ -100,7 +100,7 @@ export function BearChip({ bear }: { bear: Bear }) {
       title={BEAR_TITLE[bear.verdict]}
       className={`h-fit shrink-0 rounded px-1.5 py-0.5 font-mono text-[10px] font-bold tnum ring-1 ring-inset ${BEAR_CLS[bear.verdict]}`}
     >
-      Bear: {bear.verdict}
+      Second opinion: {bear.verdict}
       {conf}
     </span>
   );
@@ -162,7 +162,7 @@ export function ScorecardView({ card, bear }: { card: DecisionScorecard; bear?: 
         )}
         {card.penalty?.extension ? (
           <p className="text-[11px] text-watch">
-            Extended — a chase: −{card.penalty.extension} points. A pullback to VWAP is the better entry.
+            Chasing — it already ran: −{card.penalty.extension} points. Waiting for a dip back to today&apos;s average price is the better buy.
           </p>
         ) : null}
         {card.why && <p className="text-[11px] text-text">Claude: {card.why}</p>}
