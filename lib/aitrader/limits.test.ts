@@ -40,7 +40,7 @@ describe("contract tables", () => {
         "time_stop_min", "time_stop_min_r", "time_stop_mode", "market_turn_mode", "market_turn_pct", "review", "review_model",
         "use_lessons", "lessons_count", "shadow_review",
         "market_read", "flatten_backup", "entry_orders", "bear_fail_closed", "min_stop_atr", "max_breakout_age_min",
-        "lesson_min_trades", "enabled",
+        "lesson_min_trades", "enabled", "premarket_queue", "queue_ttl_min",
         "board", "board_top_n", "inplay_min_price", "inplay_min_change_pct", "inplay_min_rvol", "target_r",
         "board_regime", "regime_pct", "board_setups", "stop_max_datr", "board_wakes_per_symbol", "board_rewake_datr",
         "board_watch_n", "early_or_minutes", "max_chase_r", "premarket_min_vol_pct",
@@ -444,6 +444,14 @@ describe("in-play board settings (docs/SETTINGS_CONTRACT.md + bin/limits.py, fea
     expect(RUNNER_LIMITS.find((x) => x.key === "news_ticker_cooldown_min")).toMatchObject({ def: 60, min: 0, max: 600, int: true });
     // docs/SETTINGS_CONTRACT.md + bin/limits.py (stocky-trader main 09c6e5e)
     expect(row("premarket_min_vol_pct")).toEqual(["number", 0.3, 0, 100]);
+    // stocky-trader main 8fef7aa: orders queued for the open
+    expect(row("premarket_queue")).toEqual(["bool", true, undefined, undefined]);
+    expect(row("queue_ttl_min")).toEqual(["number", 15, 0, 390]);
+    expect(d("queue_ttl_min")).toMatchObject({ int: true, unit: "min", group: "Timing", label: "Cancel a missed open order after" });
+    expect(d("premarket_queue")).toMatchObject({ group: "Timing", label: "Place the plan before the open" });
+    expect(sectionOf(d("premarket_queue"))).toBe("When to trade");
+    expect(d("max_chase_r").hint).toMatch(/plain stop/);
+    expect(d("flat_by").hint).toMatch(/good-till-cancelled/);
     expect(d("premarket_min_vol_pct")).toMatchObject({ unit: "%", label: "Minimum pre-market volume" });
     expect(RUNNER_LIMITS.find((x) => x.key === "news_wakes_per_day")).toMatchObject({ kind: "number", def: 20, min: 0, max: 500, int: true });
     expect(RUNNER_LIMITS.find((x) => x.key === "news_scope")).toMatchObject({ kind: "select", def: "held_and_list", options: ["held", "held_and_list", "market"] });
@@ -478,6 +486,9 @@ describe("in-play board settings (docs/SETTINGS_CONTRACT.md + bin/limits.py, fea
     expect(validateLimits(CLAUDE_LIMITS, { early_or_minutes: "4" }).ok).toBe(false);
     expect(ok(validateLimits(CLAUDE_LIMITS, { max_chase_r: "9" }))).toEqual({ max_chase_r: 5 });
     expect(ok(validateLimits(CLAUDE_LIMITS, { premarket_min_vol_pct: "0" }))).toEqual({ premarket_min_vol_pct: 0 }); // 0 = no minimum
+    expect(ok(validateLimits(CLAUDE_LIMITS, { premarket_queue: "off", queue_ttl_min: "0" }))).toEqual({ premarket_queue: false, queue_ttl_min: 0 }); // 0 = keep until the close
+    expect(ok(validateLimits(CLAUDE_LIMITS, { queue_ttl_min: "999" }))).toEqual({ queue_ttl_min: 390 });
+    expect(ok(validateLimits(CLAUDE_LIMITS, { queue_ttl_min: "7.4" }))).toEqual({ queue_ttl_min: 7 });
     expect(ok(validateLimits(CLAUDE_LIMITS, { premarket_min_vol_pct: "250" }))).toEqual({ premarket_min_vol_pct: 100 });
     expect(ok(validateLimits(RUNNER_LIMITS, { news_scope: "market" }))).toEqual({ news_scope: "market" });
     expect(validateLimits(RUNNER_LIMITS, { news_scope: "everything" }).ok).toBe(false);

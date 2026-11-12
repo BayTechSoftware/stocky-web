@@ -67,7 +67,7 @@ const ORDER = [
   "max_positions", "max_new_per_run", "cash_buffer_pct", "min_reward_risk",
   "allow_short", "allow_margin", "margin_multiplier", "allow_loosen_stop",
   // When to trade
-  "no_entries_before", "no_entries_after", "flat_by", "flatten_backup",
+  "no_entries_before", "no_entries_after", "flat_by", "flatten_backup", "premarket_queue", "queue_ttl_min",
   // What to trade
   "blocked", "universe_remove", "universe_add", "allow_reentry",
   // How it decides
@@ -102,7 +102,7 @@ const ADVANCED = new Set([
   "earnings_window_days", "max_vwap_atr", "max_adr_used", "extension_penalty",
   "max_orders_per_day", "max_order_usd", "min_order_usd", "fractional", "pdt_guard", "min_stop_pct", "min_stop_atr",
   "or_minutes", "max_breakout_age_min", "board_watch_n", "early_or_minutes", "inplay_min_price", "regime_pct", "stop_max_datr", "board_wakes_per_symbol", "board_rewake_datr",
-  "flatten_lead_min", "run_timeout_s", "news_tags", "wake_min_gap_min",
+  "queue_ttl_min", "flatten_lead_min", "run_timeout_s", "news_tags", "wake_min_gap_min",
 ]);
 
 /** The scorecard weights, folded on their own behind "Fine-tune how the score is calculated". */
@@ -150,6 +150,7 @@ const SHOW_IF: Record<string, (v: Record<string, string>) => boolean> = {
   early_or_minutes: (v) => on(v.board),
   stop_max_datr: (v) => on(v.board),
   max_chase_r: (v) => on(v.board),
+  queue_ttl_min: (v) => on(v.premarket_queue),
   board_wakes_per_symbol: (v) => on(v.board),
   board_rewake_datr: (v) => on(v.board),
   news_tags: (v) => on(v.news_wake),
