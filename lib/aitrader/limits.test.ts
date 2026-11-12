@@ -43,7 +43,7 @@ describe("contract tables", () => {
         "lesson_min_trades", "enabled",
         "board", "board_top_n", "inplay_min_price", "inplay_min_change_pct", "inplay_min_rvol", "target_r",
         "board_regime", "regime_pct", "board_setups", "stop_max_datr", "board_wakes_per_symbol", "board_rewake_datr",
-        "board_watch_n", "early_or_minutes",
+        "board_watch_n", "early_or_minutes", "max_chase_r",
       ].sort()
     );
     expect(keys(RUNNER_LIMITS)).toEqual(
@@ -429,6 +429,9 @@ describe("in-play board settings (docs/SETTINGS_CONTRACT.md + bin/limits.py, fea
     expect(d("board_regime")).toMatchObject({ kind: "select", def: "filter", options: ["off", "inform", "filter"] });
     expect(d("board_setups")).toMatchObject({ kind: "words", def: "pmh,orh,orb,hod,pullback", options: ["pmh", "orh", "orb", "hod", "pullback", "reclaim", "bounce"] });
     expect(row("board_watch_n")).toEqual(["number", 30, 5, 60]);
+    expect(row("max_chase_r")).toEqual(["number", 0.5, 0, 5]);
+    expect(d("max_chase_r")).toMatchObject({ unit: "R", label: "Max chase past the trigger" });
+    expect(d("max_chase_r").int).toBeUndefined();
     expect(d("board_watch_n").int).toBe(true);
     expect(d("early_or_minutes")).toMatchObject({ kind: "select", def: "5", options: ["1", "2", "3", "5", "10"] });
     expect(d("board_top_n").hint).toMatch(/no longer halved/);
@@ -468,6 +471,9 @@ describe("in-play board settings (docs/SETTINGS_CONTRACT.md + bin/limits.py, fea
     expect(ok(validateLimits(CLAUDE_LIMITS, { board_watch_n: "1", board_top_n: "5" }))).toEqual({ board_watch_n: 5, board_top_n: 5 });
     expect(ok(validateLimits(CLAUDE_LIMITS, { early_or_minutes: 2 }))).toEqual({ early_or_minutes: "2" });
     expect(validateLimits(CLAUDE_LIMITS, { early_or_minutes: "4" }).ok).toBe(false);
+    expect(ok(validateLimits(CLAUDE_LIMITS, { max_chase_r: "9" }))).toEqual({ max_chase_r: 5 });
+    expect(ok(validateLimits(CLAUDE_LIMITS, { max_chase_r: "0" }))).toEqual({ max_chase_r: 0 }); // 0 = no limit
+    expect(ok(validateLimits(CLAUDE_LIMITS, { max_chase_r: "0.75" }))).toEqual({ max_chase_r: 0.75 });
     expect(ok(validateLimits(RUNNER_LIMITS, { news_ticker_cooldown_min: "0" }))).toEqual({ news_ticker_cooldown_min: 0 });
     expect(ok(validateLimits(RUNNER_LIMITS, { news_ticker_cooldown_min: "9999" }))).toEqual({ news_ticker_cooldown_min: 600 });
   });
@@ -482,7 +488,7 @@ describe("in-play board settings (docs/SETTINGS_CONTRACT.md + bin/limits.py, fea
 
   it("is a Claude-box-only group, in its own section; target_r sits with the exits", () => {
     expect(defsForBook("free").some((x) => x.group === "In-play board")).toBe(false);
-    expect(defsForBook("claude-free").filter((x) => x.group === "In-play board")).toHaveLength(13);
+    expect(defsForBook("claude-free").filter((x) => x.group === "In-play board")).toHaveLength(14);
     expect(sectionOf(d("board_setups"))).toBe("In-play board");
     expect(sectionOf(d("target_r"))).toBe("Exits");
   });

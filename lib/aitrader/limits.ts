@@ -24,7 +24,7 @@ export interface LimitDef {
   hint?: string;
   kind: LimitKind;
   group: string;
-  unit?: "%" | "$" | "×" | "min" | "s" | "days" | "";
+  unit?: "%" | "$" | "×" | "min" | "s" | "days" | "R" | "";
   min?: number;
   max?: number;
   int?: boolean; // whole numbers only (rounded)
@@ -257,6 +257,7 @@ export const BOARD_LIMITS: LimitDef[] = [
   { key: "board_setups", group: "In-play board", label: "Kinds of setup to look for", kind: "words", options: BOARD_SETUPS, optionLabels: { pmh: "Pre-market high break", orh: "Early range break", orb: "Range break", hod: "New high of day", pullback: "First pullback", reclaim: "VWAP reclaim", bounce: "Failed bounce (short)" }, def: "pmh,orh,orb,hod,pullback", hint: "pmh = break of the pre-market high (or low, for a short). orh = break of the early range (the first minutes set below). orb = break of the opening range. hod = a new high (or low) after a pause. pullback = the first pullback in an uptrend. reclaim = VWAP reclaim. bounce = a short on a failed bounce. VWAP reclaim and Failed bounce are off by default; they lost money in the replays" },
   { key: "board_wakes_per_symbol", group: "In-play board", label: "Most wake-ups per stock per day", unit: "", kind: "number", min: 0, max: 100, int: true, def: 3, hint: "how many times one stock may wake Claude in a day. Later setups in it are still shown on the scheduled runs. 0 = no limit" },
   { key: "board_rewake_datr", group: "In-play board", label: "Wake again on a new high only if it is this much further", unit: "×", kind: "number", min: 0, max: 10, def: 0.25, hint: "a new high (or low) after a pause wakes Claude again only when it is at least this many daily ATRs (the stock's normal daily range) beyond the last level that woke it. 0 = every new level wakes" },
+  { key: "max_chase_r", group: "In-play board", label: "Max chase past the trigger", unit: "R", kind: "number", min: 0, max: 5, def: 0.5, hint: "won't buy at market when the price is already more than this many R past the setup's trigger (R = trigger to stop); 0 = no limit" },
   { key: "stop_max_datr", group: "In-play board", label: "Widest stop allowed", unit: "×", kind: "number", min: 0.1, max: 5, def: 0.5, hint: "a board setup's stop is never further from its buy point than this many daily ATRs (the stock's normal daily range). Wider setups are tightened or skipped" },
 ];
 

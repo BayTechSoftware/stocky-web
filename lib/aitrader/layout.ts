@@ -73,7 +73,7 @@ const ORDER = [
   // How it decides
   "entry_orders", "scorecard", "min_score",
   // In-play board
-  "board", "board_top_n", "board_watch_n", "board_setups", "early_or_minutes", "board_regime", "regime_pct", "inplay_min_change_pct", "inplay_min_rvol", "inplay_min_price", "stop_max_datr",
+  "board", "board_top_n", "board_watch_n", "board_setups", "early_or_minutes", "board_regime", "regime_pct", "inplay_min_change_pct", "inplay_min_rvol", "inplay_min_price", "stop_max_datr", "max_chase_r",
   // Checks
   "market_read", "bear_mode", "bear_block_conf", "bear_fail_closed", "bear_model", "memory_trades",
   // Learning
@@ -147,6 +147,7 @@ const SHOW_IF: Record<string, (v: Record<string, string>) => boolean> = {
   board_watch_n: (v) => on(v.board),
   early_or_minutes: (v) => on(v.board),
   stop_max_datr: (v) => on(v.board),
+  max_chase_r: (v) => on(v.board),
   board_wakes_per_symbol: (v) => on(v.board),
   board_rewake_datr: (v) => on(v.board),
   news_tags: (v) => on(v.news_wake),
