@@ -73,7 +73,7 @@ const ORDER = [
   // How it decides
   "entry_orders", "scorecard", "min_score",
   // In-play board
-  "board", "board_top_n", "board_setups", "board_regime", "regime_pct", "inplay_min_change_pct", "inplay_min_rvol", "inplay_min_price", "stop_max_datr",
+  "board", "board_top_n", "board_watch_n", "board_setups", "early_or_minutes", "board_regime", "regime_pct", "inplay_min_change_pct", "inplay_min_rvol", "inplay_min_price", "stop_max_datr",
   // Checks
   "market_read", "bear_mode", "bear_block_conf", "bear_fail_closed", "bear_model", "memory_trades",
   // Learning
@@ -101,7 +101,7 @@ export function sortDefs(defs: LimitDef[]): LimitDef[] {
 const ADVANCED = new Set([
   "earnings_window_days", "max_vwap_atr", "max_adr_used", "extension_penalty",
   "max_orders_per_day", "max_order_usd", "min_order_usd", "fractional", "pdt_guard", "min_stop_pct", "min_stop_atr",
-  "or_minutes", "max_breakout_age_min", "inplay_min_price", "regime_pct", "stop_max_datr", "board_wakes_per_symbol", "board_rewake_datr",
+  "or_minutes", "max_breakout_age_min", "board_watch_n", "early_or_minutes", "inplay_min_price", "regime_pct", "stop_max_datr", "board_wakes_per_symbol", "board_rewake_datr",
   "flatten_lead_min", "run_timeout_s", "news_tags", "wake_min_gap_min",
 ]);
 
@@ -144,6 +144,8 @@ const SHOW_IF: Record<string, (v: Record<string, string>) => boolean> = {
   board_regime: (v) => on(v.board),
   regime_pct: (v) => on(v.board) && v.board_regime !== "off",
   board_setups: (v) => on(v.board),
+  board_watch_n: (v) => on(v.board),
+  early_or_minutes: (v) => on(v.board),
   stop_max_datr: (v) => on(v.board),
   board_wakes_per_symbol: (v) => on(v.board),
   board_rewake_datr: (v) => on(v.board),

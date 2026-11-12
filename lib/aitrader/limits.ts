@@ -243,16 +243,18 @@ export const CLAUDE_EXTRA_LIMITS: LimitDef[] = [
  * The intraday board (Free Choice only; the My List box ignores these): the Mac ranks the whole market and
  * finds setups with a trigger and a stop. Mirrors docs/SETTINGS_CONTRACT.md "Intraday board".
  */
-export const BOARD_SETUPS = ["orb", "hod", "pullback", "reclaim", "bounce"];
+export const BOARD_SETUPS = ["pmh", "orh", "orb", "hod", "pullback", "reclaim", "bounce"];
 export const BOARD_LIMITS: LimitDef[] = [
   { key: "board", group: "In-play board", label: "Use the in-play board", kind: "bool", def: true, hint: "the Mac ranks the whole market every ~2 minutes for stocks that are moving today, finds a buy point and stop for each, and wakes Claude on the best. Off = the older once-a-day opening-range scan" },
-  { key: "board_top_n", group: "In-play board", label: "Stocks shown per side", unit: "", kind: "number", min: 1, max: 30, int: true, def: 10, hint: "how many rising stocks Claude sees (half as many falling ones for shorts) and how many the Mac watches for wake-ups. Fewer = fewer wake-ups and a cheaper week" },
+  { key: "board_top_n", group: "In-play board", label: "Stocks shown per side", unit: "", kind: "number", min: 1, max: 30, int: true, def: 10, hint: "how many rising stocks Claude sees in full, and the same number of falling ones for shorts (shorts are no longer halved). Fewer = fewer wake-ups and a cheaper week" },
+  { key: "board_watch_n", group: "In-play board", label: "Stocks watched for setups (per side)", unit: "", kind: "number", min: 5, max: 60, int: true, def: 30, hint: "setups are worked out for this many stocks on each side; Claude is shown the top \"Stocks shown\" plus any of these whose setup is triggering. Must be at least \"Stocks shown per side\"" },
+  { key: "early_or_minutes", group: "In-play board", label: "Early opening range", kind: "select", options: ["1", "2", "3", "5", "10"], optionLabels: { "1": "1 min", "2": "2 min", "3": "3 min", "5": "5 min", "10": "10 min" }, def: "5", hint: "the first minutes after the bell whose high and low the early range break (orh, or orl for a short) is measured from" },
   { key: "inplay_min_price", group: "In-play board", label: "Lowest share price", unit: "$", kind: "number", min: 0, max: 100_000, def: 5, hint: "stocks under this price never make the board" },
   { key: "inplay_min_change_pct", group: "In-play board", label: "Must be up or down at least", unit: "%", kind: "number", min: 0, max: 100, def: 2, hint: "versus yesterday's close, in either direction, to count as in play" },
   { key: "inplay_min_rvol", group: "In-play board", label: "Must be this much busier than usual", unit: "×", kind: "number", min: 0, max: 100, def: 1.5, hint: "trading volume so far today versus a normal day by this time (1.5 = half as much again)" },
   { key: "board_regime", group: "In-play board", label: "Follow the market's direction", kind: "select", options: ["off", "inform", "filter"], optionLabels: { off: "Ignore", inform: "Show Claude", filter: "Hide trades against it" }, def: "filter", hint: "SPY and QQQ together. Show Claude: the board's header says which way the market is going. Hide trades against it: when both are clearly up there are no shorts on the board, when both are clearly down no buys" },
   { key: "regime_pct", group: "In-play board", label: "A clear up or down market is at least", unit: "%", kind: "number", min: 0, max: 10, def: 0.3, hint: "how far SPY and QQQ must both be from yesterday's close" },
-  { key: "board_setups", group: "In-play board", label: "Kinds of setup to look for", kind: "words", options: BOARD_SETUPS, optionLabels: { orb: "Range break", hod: "New high of day", pullback: "First pullback", reclaim: "VWAP reclaim", bounce: "Failed bounce (short)" }, def: "orb,hod,pullback", hint: "Range break: through the opening range (or below it, for a short). New high of day: a new high (or low) after a pause. First pullback: a dip to buy in an uptrend. VWAP reclaim and Failed bounce are off by default; they lost money in the replays" },
+  { key: "board_setups", group: "In-play board", label: "Kinds of setup to look for", kind: "words", options: BOARD_SETUPS, optionLabels: { pmh: "Pre-market high break", orh: "Early range break", orb: "Range break", hod: "New high of day", pullback: "First pullback", reclaim: "VWAP reclaim", bounce: "Failed bounce (short)" }, def: "pmh,orh,orb,hod,pullback", hint: "pmh = break of the pre-market high (or low, for a short). orh = break of the early range (the first minutes set below). orb = break of the opening range. hod = a new high (or low) after a pause. pullback = the first pullback in an uptrend. reclaim = VWAP reclaim. bounce = a short on a failed bounce. VWAP reclaim and Failed bounce are off by default; they lost money in the replays" },
   { key: "board_wakes_per_symbol", group: "In-play board", label: "Most wake-ups per stock per day", unit: "", kind: "number", min: 0, max: 100, int: true, def: 3, hint: "how many times one stock may wake Claude in a day. Later setups in it are still shown on the scheduled runs. 0 = no limit" },
   { key: "board_rewake_datr", group: "In-play board", label: "Wake again on a new high only if it is this much further", unit: "×", kind: "number", min: 0, max: 10, def: 0.25, hint: "a new high (or low) after a pause wakes Claude again only when it is at least this many daily ATRs (the stock's normal daily range) beyond the last level that woke it. 0 = every new level wakes" },
   { key: "stop_max_datr", group: "In-play board", label: "Widest stop allowed", unit: "×", kind: "number", min: 0.1, max: 5, def: 0.5, hint: "a board setup's stop is never further from its buy point than this many daily ATRs (the stock's normal daily range). Wider setups are tightened or skipped" },
@@ -272,7 +274,7 @@ export const CLAUDE_LIMITS: LimitDef[] = [
   { key: "min_order_usd", group: "Risk & size", label: "Smallest order", unit: "$", kind: "number", min: 0, max: 1_000_000, def: 5, hint: "0 = off" },
   { key: "min_reward_risk", group: "Risk & size", label: "Least upside per $ risked", unit: "×", kind: "number", min: 0, max: 20, def: 1, hint: "× the risk: 2 = the target must be at least twice as far as the stop. 0 = off" },
   // Timing
-  { key: "no_entries_before", group: "Timing", label: "Start buying at (NY time)", kind: "time", def: "09:45", allowOff: true, hint: "off = from the open" },
+  { key: "no_entries_before", group: "Timing", label: "Start buying at (NY time)", kind: "time", def: "09:30", allowOff: true, hint: "off = from the open" },
   { key: "no_entries_after", group: "Timing", label: "Stop buying at (NY time)", kind: "time", def: "15:30", allowOff: true, hint: "off = until the close" },
   { key: "flat_by", group: "Timing", label: "Sell everything by (NY time)", kind: "time", def: "15:55", allowOff: true, hint: "off = may hold overnight (the stop and target orders stay at Alpaca; part-shares are still sold before the close). On a half-day: 5 minutes before the close at the latest" },
   { key: "or_minutes", group: "Timing", label: "Length of the opening range", kind: "select", options: ["5", "10", "15", "20", "30", "45", "60"], optionLabels: { "5": "5 min", "10": "10 min", "15": "15 min", "20": "20 min", "30": "30 min", "45": "45 min", "60": "60 min" }, def: "15", hint: "the first minutes after the open whose high and low a breakout is measured from; Claude can still pick another for one trade" },
@@ -444,6 +446,11 @@ export function validateLimits(
     if (typeof early === "string" && typeof scan === "string" && TIME_RE.test(early) && TIME_RE.test(scan) && toMin(early) > toMin(scan)) {
       errors.push("The early look must not be later than the pre-market scan");
     }
+  }
+
+  // The board works out setups for at least the stocks it shows.
+  if (has("board_watch_n") && has("board_top_n") && Number(val("board_watch_n")) < Number(val("board_top_n"))) {
+    errors.push("\"Stocks watched for setups\" must be at least \"Stocks shown per side\"");
   }
 
   if (has("min_stop_pct") && has("max_stop_pct")) {
