@@ -227,6 +227,7 @@ export const PHASE: Record<string, string> = {
   ENTRY: "Looking for trades",
   MANAGE: "Managing open trades",
   FLATTEN: "Closing everything for the day",
+  CLOSE: "Owner closed everything in this box",
   CLOSED: "Market closed",
 };
 

@@ -2,7 +2,8 @@
 
 import { useState, useTransition, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
-import { loadRunDetail, removeNote, runAiTrader } from "../actions";
+import { closeRulesBox, loadRunDetail, removeNote, runAiTrader } from "../actions";
+import type { CloseOutLine, CloseOutResult } from "@/lib/aitrader/engine";
 import { money, moneySigned, pct, price as fprice, shares } from "@/lib/portfolio";
 import { CLAUDE_LIMITS, RUNNER_LIMITS, SCORECARD_GATE_LABEL, boxEnabled, defsForBook, effective, rulesDefs, type LimitValue } from "@/lib/aitrader/limits";
 import type { SettingsSection } from "@/lib/aitrader/layout";
@@ -814,6 +815,142 @@ function Block({ title, hint, children }: { title: string; hint?: string; childr
   );
 }
 
+const CLOSE_STATUS: Record<CloseOutLine["status"], { word: string; cls: string }> = {
+  preview: { word: "to close", cls: "text-text" },
+  skipped: { word: "skipped", cls: "text-watch" },
+  queued: { word: "queued for the open", cls: "text-watch" },
+  working: { word: "placed, working", cls: "text-text" },
+  filled: { word: "filled", cls: "text-gain" },
+  rejected: { word: "rejected", cls: "text-loss" },
+};
+
+/** Rules boxes only: close this box's own positions (and its own orders on them), with a confirm list first. */
+function CloseBoxPanel({ bookKey, name }: { bookKey: string; name: string }) {
+  const [plan, setPlan] = useState<CloseOutResult | null>(null);
+  const [done, setDone] = useState<CloseOutResult | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, start] = useTransition();
+  const router = useRouter();
+
+  function preview() {
+    setErr(null);
+    setDone(null);
+    start(async () => {
+      try {
+        const r = await closeRulesBox(bookKey, { preview: true });
+        if ("error" in r) setErr(r.error);
+        else setPlan(r.result);
+      } catch (e) {
+        setErr(e instanceof Error ? e.message : String(e));
+      }
+    });
+  }
+  function confirmClose() {
+    if (!plan) return;
+    const confirmed = plan.items.filter((i) => !i.skip).map((i) => ({ symbol: i.symbol, side: i.side, qty: i.qty }));
+    setErr(null);
+    start(async () => {
+      try {
+        const r = await closeRulesBox(bookKey, { preview: false, confirmed });
+        if ("error" in r) setErr(r.error);
+        else {
+          setDone(r.result);
+          setPlan(null);
+        }
+      } catch (e) {
+        setErr(e instanceof Error ? e.message : String(e));
+      }
+      router.refresh();
+    });
+  }
+
+  const toClose = plan?.items.filter((i) => !i.skip) ?? [];
+  const shown = done ?? plan;
+  return (
+    <div className="rounded-xl border border-loss/40 p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="max-w-prose text-xs leading-snug text-dim">
+          Close everything in {name}: cancels this box&apos;s own stops, targets and resting orders, then sells (or buys
+          back) only this box&apos;s own shares at market. Other boxes&apos; shares in the same stock are not touched.
+        </p>
+        {!plan && (
+          <button
+            type="button"
+            onClick={preview}
+            disabled={busy}
+            className="rounded-lg border border-loss/50 bg-loss/10 px-3 py-1.5 text-sm font-semibold text-loss hover:bg-loss/20 disabled:opacity-60"
+          >
+            {busy ? "Checking…" : "Close everything in this box…"}
+          </button>
+        )}
+      </div>
+
+      {shown && (
+        <div className="mt-3 space-y-2">
+          {shown.items.length === 0 && shown.entries.length === 0 ? (
+            <p className="text-xs text-dim">Nothing to close: this box holds no positions and has no resting orders.</p>
+          ) : (
+            <ul className="divide-y divide-border rounded-lg border border-border">
+              {shown.items.map((it) => (
+                <li key={it.symbol} className="flex items-baseline justify-between gap-3 px-3 py-2 text-sm">
+                  <span className="min-w-0">
+                    <span className={`font-semibold ${it.side === "sell" ? "text-loss" : "text-gain"}`}>{it.side === "sell" ? "Sell" : "Buy to cover"}</span>{" "}
+                    <span className="font-mono tnum text-text">{shares(it.qty)}</span>{" "}
+                    <span className="font-display font-semibold text-text">{it.symbol}</span>
+                    {it.mark != null && <span className="font-mono text-[11px] text-faint tnum"> ≈ {money(it.qty * it.mark, 2)}</span>}
+                    <span className="block text-[11px] leading-snug text-faint">{it.detail}</span>
+                  </span>
+                  <span className={`shrink-0 text-[11px] font-semibold ${CLOSE_STATUS[it.status].cls}`}>{CLOSE_STATUS[it.status].word}</span>
+                </li>
+              ))}
+              {shown.entries.map((e) => (
+                <li key={e.id} className="flex items-baseline justify-between gap-3 px-3 py-2 text-sm">
+                  <span className="min-w-0">
+                    <span className="font-semibold text-dim">Cancel</span> <span className="font-mono tnum text-text">{shares(e.qty)}</span>{" "}
+                    <span className="font-display font-semibold text-text">{e.symbol}</span>
+                    <span className="block text-[11px] leading-snug text-faint">{e.detail}</span>
+                  </span>
+                  <span className={`shrink-0 text-[11px] font-semibold ${e.status === "failed" ? "text-loss" : e.status === "cancelled" ? "text-gain" : "text-text"}`}>
+                    {e.status === "preview" ? "to cancel" : e.status}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+          {!shown.marketOpen && (plan ? toClose.length > 0 : shown.items.some((i) => i.orderId)) && (
+            <p className="text-[11px] text-watch">
+              The market is closed: market orders are queued at Alpaca and fill at the next open — nothing has filled yet.
+            </p>
+          )}
+          {shown.note && <p className="text-[11px] text-faint">{shown.note}</p>}
+          {plan && (
+            <div className="flex flex-wrap items-center gap-2 pt-1">
+              <button
+                type="button"
+                onClick={confirmClose}
+                disabled={busy || (toClose.length === 0 && plan.entries.length === 0)}
+                className="rounded-lg bg-loss px-3 py-1.5 text-sm font-semibold text-bg hover:brightness-110 disabled:opacity-60"
+              >
+                {busy ? "Closing…" : `Yes, close ${toClose.length} position${toClose.length === 1 ? "" : "s"}${plan.entries.length ? ` and cancel ${plan.entries.length} order${plan.entries.length === 1 ? "" : "s"}` : ""}`}
+              </button>
+              <button
+                type="button"
+                onClick={() => setPlan(null)}
+                disabled={busy}
+                className="rounded-lg border border-border bg-surface px-3 py-1.5 text-sm text-dim hover:bg-surface2 hover:text-text disabled:opacity-60"
+              >
+                Cancel
+              </button>
+              <span className="text-[11px] text-faint">Paper account · simulated money</span>
+            </div>
+          )}
+        </div>
+      )}
+      {err && <p className="mt-2 text-xs text-loss">{err}</p>}
+    </div>
+  );
+}
+
 /** Run both Rules boxes now, or a dry run (decisions only). */
 function RulesRunButtons() {
   const [msg, setMsg] = useState<{ text: string; err?: boolean } | null>(null);
@@ -1073,6 +1210,12 @@ export function BookCard({
                     </li>
                   ))}
                 </ul>
+              </Block>
+            )}
+
+            {!isClaude && (b.positions.length > 0 || b.pending.length > 0) && (
+              <Block title="Close this box" hint={off ? "works while the box is off" : undefined}>
+                <CloseBoxPanel bookKey={b.key} name={b.name} />
               </Block>
             )}
 

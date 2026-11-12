@@ -25,6 +25,7 @@ import { ownerOf } from "./live";
 import { adjustedSince, baselineOf, loadAdjustments } from "./cash";
 import { anchorToFill, entryOrderBody, isStaleEntry, nyIso, reservedCash, rulesFor, weekdaySessions, type Rules, type Session } from "./plan";
 import { freeUniverse } from "./universe";
+import { CLOSE_OUT_REASON, matchConfirmed, planCloseOut, type CloseOutItem, type ConfirmedItem } from "./closeout";
 import { atr, type Candidate } from "./setups";
 import {
   HISTORY_DAYS,
@@ -295,95 +296,8 @@ async function runForUser(admin: Admin, mode: RunMode, books: BookRow[], creds: 
       book: b.name, mode, equity: 0, cash: 0, available: 0, decisions: [], note: "market holiday — skipped",
     }));
   }
-  const since = books.map((b) => b.created_at).sort()[0];
-
   /* ---- 1. sync Alpaca order status + fills into the ledger ---- */
-  // Paged and fail-loud: a run never trades from half a ledger (a read error fails the run before anything is placed).
-  const ours = await loadOrders<OrderRow>(
-    admin,
-    bookIds,
-    "id, book_id, symbol, side, kind, qty, limit_price, stop_price, target_price, leg_ids, alpaca_order_id, client_order_id, status, filled_qty, filled_avg, created_at"
-  );
-  const bookOfOrder = new Map<string, string>();
-  for (const o of ours) {
-    if (o.alpaca_order_id) bookOfOrder.set(o.alpaca_order_id, o.book_id);
-    for (const l of o.leg_ids ?? []) bookOfOrder.set(l, o.book_id);
-  }
-
-  const remote = await A.listOrders(creds, since);
-  const remoteById = new Map<string, A.Order>();
-  for (const r of remote) {
-    remoteById.set(r.id, r);
-    for (const l of r.legs ?? []) remoteById.set(l.id, l);
-  }
-
-  // Our own orders by their client id prefix (stk-<book>-…), as syncLive does: an order that was placed
-  // but never recorded (the insert failed) still owns its fills, and is recorded now so its stop counts.
-  const bookIdByKey = new Map(books.map((b) => [b.key as string, b.id]));
-  const known = new Set(ours.map((o) => o.alpaca_order_id).filter(Boolean));
-  const recovered = recoveredOrders(remote, bookIdByKey, known);
-  for (const r of remote) {
-    const key = ownerOf(r.client_order_id ?? "");
-    const bid = key ? bookIdByKey.get(key) : undefined;
-    if (!bid) continue;
-    bookOfOrder.set(r.id, bid);
-    for (const l of r.legs ?? []) bookOfOrder.set(l.id, bid);
-  }
-  const recoveryNotes = new Map<string, string>();
-  if (recovered.length) {
-    const { data: rec, error: recErr } = await admin
-      .from("ai_orders")
-      .upsert(recovered, { onConflict: "alpaca_order_id", ignoreDuplicates: true })
-      .select("id, book_id, symbol, side, kind, qty, limit_price, stop_price, target_price, leg_ids, alpaca_order_id, client_order_id, status, filled_qty, filled_avg, created_at");
-    if (recErr) throw new Error(`ai_orders (recovering unrecorded orders): ${recErr.message}`);
-    for (const o of (rec ?? []) as OrderRow[]) {
-      ours.push(o);
-      known.add(o.alpaca_order_id);
-      recoveryNotes.set(o.book_id, [recoveryNotes.get(o.book_id), `recorded ${o.symbol} order ${o.alpaca_order_id} that was placed but missing from the ledger.`].filter(Boolean).join(" "));
-    }
-  }
-  for (const o of ours) {
-    const r = o.alpaca_order_id ? remoteById.get(o.alpaca_order_id) : undefined;
-    if (!r) continue;
-    const patch: Partial<OrderRow> = {};
-    if (r.status !== o.status) patch.status = r.status;
-    const fq = Number(r.filled_qty) || 0;
-    if (fq !== o.filled_qty) patch.filled_qty = fq;
-    const fa = r.filled_avg_price != null ? Number(r.filled_avg_price) : null;
-    if (fa !== o.filled_avg) patch.filled_avg = fa;
-    const legIds = (r.legs ?? []).map((l) => l.id);
-    if (legIds.length && (o.leg_ids?.length ?? 0) === 0) {
-      patch.leg_ids = legIds;
-      for (const l of legIds) bookOfOrder.set(l, o.book_id);
-    }
-    if (Object.keys(patch).length) {
-      must(`ai_orders update ${o.id}`, await admin.from("ai_orders").update(patch).eq("id", o.id));
-      Object.assign(o, patch);
-    }
-  }
-
-  const acts = await A.listFills(creds, since);
-  const fillRows = acts
-    .filter((a) => bookOfOrder.has(a.order_id))
-    .map((a) => ({
-      activity_id: a.id,
-      book_id: bookOfOrder.get(a.order_id)!,
-      order_id: a.order_id,
-      symbol: a.symbol,
-      side: a.side,
-      qty: Number(a.qty),
-      price: Number(a.price),
-      transacted_at: a.transaction_time,
-    }));
-  if (fillRows.length) {
-    must("ai_fills upsert", await admin.from("ai_fills").upsert(fillRows, { onConflict: "activity_id", ignoreDuplicates: true }));
-  }
-  const allFills = await loadFills<{ book_id: string; order_id: string; symbol: string; side: string; qty: number; price: number; transacted_at: string }>(
-    admin,
-    bookIds,
-    "book_id, order_id, symbol, side, qty, price, transacted_at"
-  );
-  const { shortEntries } = shortOrderIds(ours);
+  const { ours, bookOfOrder, remote, remoteById, recoveryNotes, allFills, shortEntries } = await syncLedger(admin, books, creds);
 
   // Claude books short on this same account; Rules books must never buy into that.
   let shorts: ShortCheck;
@@ -864,48 +778,176 @@ async function runForUser(admin: Admin, mode: RunMode, books: BookRow[], creds: 
         .filter((o) => o.kind === "exit" && o.symbol === symbol && o.stop_price != null && o.alpaca_order_id)
         .map((o) => o.alpaca_order_id!),
     ].filter((id) => LIVE.has(remoteById.get(id)?.status ?? ""));
-    for (const id of ids) await A.cancelOrder(creds, id).catch(() => undefined);
-    // Poll the legs and write what we see back into the cache, so a later stop check reads the truth.
-    const poll = (id: string) =>
-      A.getOrder(creds, id).then(
-        (o) => {
-          remoteById.set(id, o);
-          return o.status;
-        },
-        () => {
-          remoteById.delete(id); // unknown now: stopIsLive() re-reads it
-          return "unknown";
-        }
-      );
-    for (let i = 0; i < 6 && ids.length; i++) {
-      const states = await Promise.all(ids.map(poll));
-      if (states.every((s) => !LIVE.has(s) && s !== "pending_cancel")) break;
-      await sleep(500);
-    }
-    let o: A.Order;
-    let clientId: string;
-    try {
-      ({ order: o, clientId } = await submitProtective(
-        creds,
-        { symbol, qty: String(qty), side: "sell", type: "market", time_in_force: "day" },
-        clientOrderId(b.key, "x", symbol, today)
-      ));
-    } catch (e) {
-      // The sell failed after the stop legs were cancelled: re-read them so the stop check that follows
-      // (runBook step e) sees fresh states and places a stop if none is left.
-      await Promise.all(ids.map(poll));
-      throw e;
-    }
-    const recErr = await recordOrder(admin, {
-      book_id: b.id, symbol, side: "sell", kind: "exit", qty, reason: why,
-      alpaca_order_id: o.id, client_order_id: clientId, status: o.status,
-    });
-    // Never throw here: the sell is queued, so the caller must treat the position as exited (no second stop).
-    return recErr ? `${symbol}: exit ${o.id} placed but not recorded (${recErr}) — the next run records it from Alpaca.` : null;
+    const { note } = await closeAtMarket({ admin, creds, remoteById, today }, b, symbol, qty, "sell", why, ids);
+    return note;
   }
 }
 
 const LIVE = new Set([...OPEN, "pending_replace"]);
+
+/**
+ * Cancel these orders (the position's own stops / targets), wait until they're gone, then close the
+ * position at market (a day order: queued for the next open when the market is closed) under the box's
+ * deterministic exit id stk-<key>-x-<SYMBOL>-<NY date> (-2 … -5 when used today), and record it.
+ * Shared by the rule exits and closeOutBook. Never throws after the order is placed: a recording
+ * failure comes back as `note` (the order is queued; the caller must treat the position as exited).
+ */
+async function closeAtMarket(
+  ctx: { admin: Admin; creds: A.Creds; remoteById: Map<string, A.Order>; today: string },
+  b: { id: string; key: string },
+  symbol: string,
+  qty: number,
+  side: "sell" | "buy",
+  why: string,
+  ids: string[]
+): Promise<{ order: A.Order; clientId: string; note: string | null }> {
+  const { admin, creds, remoteById, today } = ctx;
+  for (const id of ids) await A.cancelOrder(creds, id).catch(() => undefined);
+  // Poll the legs and write what we see back into the cache, so a later stop check reads the truth.
+  const poll = (id: string) =>
+    A.getOrder(creds, id).then(
+      (o) => {
+        remoteById.set(id, o);
+        return o.status;
+      },
+      () => {
+        remoteById.delete(id); // unknown now: stopIsLive() re-reads it
+        return "unknown";
+      }
+    );
+  for (let i = 0; i < 6 && ids.length; i++) {
+    const states = await Promise.all(ids.map(poll));
+    if (states.every((s) => !LIVE.has(s) && s !== "pending_cancel")) break;
+    await sleep(500);
+  }
+  let o: A.Order;
+  let clientId: string;
+  try {
+    ({ order: o, clientId } = await submitProtective(
+      creds,
+      { symbol, qty: String(qty), side, type: "market", time_in_force: "day" },
+      clientOrderId(b.key, "x", symbol, today)
+    ));
+  } catch (e) {
+    // The order failed after the stop legs were cancelled: re-read them so the stop check that follows
+    // (runBook step e) sees fresh states and places a stop if none is left.
+    await Promise.all(ids.map(poll));
+    throw e;
+  }
+  const recErr = await recordOrder(admin, {
+    book_id: b.id, symbol, side, kind: "exit", qty, reason: why,
+    alpaca_order_id: o.id, client_order_id: clientId, status: o.status,
+  });
+  return { order: o, clientId, note: recErr ? `${symbol}: exit ${o.id} placed but not recorded (${recErr}) — the next run records it from Alpaca.` : null };
+}
+
+/** The synced ledger of a user's Rules books (step 1 of a run, shared with closeOutBook). */
+interface SyncedLedger {
+  ours: OrderRow[];
+  bookOfOrder: Map<string, string>;
+  remote: A.Order[];
+  remoteById: Map<string, A.Order>;
+  recoveryNotes: Map<string, string>;
+  allFills: { book_id: string; order_id: string; symbol: string; side: string; qty: number; price: number; transacted_at: string }[];
+  shortEntries: Set<string>;
+}
+
+/**
+ * Sync Alpaca order status + fills into the ledger for these books (all of one user). Paged and
+ * fail-loud: a read error throws before anything is placed. Writes only ai_orders / ai_fills.
+ */
+async function syncLedger(admin: Admin, books: BookRow[], creds: A.Creds): Promise<SyncedLedger> {
+  const bookIds = books.map((b) => b.id);
+  const since = books.map((b) => b.created_at).sort()[0];
+
+  // Paged and fail-loud: a run never trades from half a ledger (a read error fails the run before anything is placed).
+  const ours = await loadOrders<OrderRow>(
+    admin,
+    bookIds,
+    "id, book_id, symbol, side, kind, qty, limit_price, stop_price, target_price, leg_ids, alpaca_order_id, client_order_id, status, filled_qty, filled_avg, created_at"
+  );
+  const bookOfOrder = new Map<string, string>();
+  for (const o of ours) {
+    if (o.alpaca_order_id) bookOfOrder.set(o.alpaca_order_id, o.book_id);
+    for (const l of o.leg_ids ?? []) bookOfOrder.set(l, o.book_id);
+  }
+
+  const remote = await A.listOrders(creds, since);
+  const remoteById = new Map<string, A.Order>();
+  for (const r of remote) {
+    remoteById.set(r.id, r);
+    for (const l of r.legs ?? []) remoteById.set(l.id, l);
+  }
+
+  // Our own orders by their client id prefix (stk-<book>-…), as syncLive does: an order that was placed
+  // but never recorded (the insert failed) still owns its fills, and is recorded now so its stop counts.
+  const bookIdByKey = new Map(books.map((b) => [b.key as string, b.id]));
+  const known = new Set(ours.map((o) => o.alpaca_order_id).filter(Boolean));
+  const recovered = recoveredOrders(remote, bookIdByKey, known);
+  for (const r of remote) {
+    const key = ownerOf(r.client_order_id ?? "");
+    const bid = key ? bookIdByKey.get(key) : undefined;
+    if (!bid) continue;
+    bookOfOrder.set(r.id, bid);
+    for (const l of r.legs ?? []) bookOfOrder.set(l.id, bid);
+  }
+  const recoveryNotes = new Map<string, string>();
+  if (recovered.length) {
+    const { data: rec, error: recErr } = await admin
+      .from("ai_orders")
+      .upsert(recovered, { onConflict: "alpaca_order_id", ignoreDuplicates: true })
+      .select("id, book_id, symbol, side, kind, qty, limit_price, stop_price, target_price, leg_ids, alpaca_order_id, client_order_id, status, filled_qty, filled_avg, created_at");
+    if (recErr) throw new Error(`ai_orders (recovering unrecorded orders): ${recErr.message}`);
+    for (const o of (rec ?? []) as OrderRow[]) {
+      ours.push(o);
+      known.add(o.alpaca_order_id);
+      recoveryNotes.set(o.book_id, [recoveryNotes.get(o.book_id), `recorded ${o.symbol} order ${o.alpaca_order_id} that was placed but missing from the ledger.`].filter(Boolean).join(" "));
+    }
+  }
+  for (const o of ours) {
+    const r = o.alpaca_order_id ? remoteById.get(o.alpaca_order_id) : undefined;
+    if (!r) continue;
+    const patch: Partial<OrderRow> = {};
+    if (r.status !== o.status) patch.status = r.status;
+    const fq = Number(r.filled_qty) || 0;
+    if (fq !== o.filled_qty) patch.filled_qty = fq;
+    const fa = r.filled_avg_price != null ? Number(r.filled_avg_price) : null;
+    if (fa !== o.filled_avg) patch.filled_avg = fa;
+    const legIds = (r.legs ?? []).map((l) => l.id);
+    if (legIds.length && (o.leg_ids?.length ?? 0) === 0) {
+      patch.leg_ids = legIds;
+      for (const l of legIds) bookOfOrder.set(l, o.book_id);
+    }
+    if (Object.keys(patch).length) {
+      must(`ai_orders update ${o.id}`, await admin.from("ai_orders").update(patch).eq("id", o.id));
+      Object.assign(o, patch);
+    }
+  }
+
+  const acts = await A.listFills(creds, since);
+  const fillRows = acts
+    .filter((a) => bookOfOrder.has(a.order_id))
+    .map((a) => ({
+      activity_id: a.id,
+      book_id: bookOfOrder.get(a.order_id)!,
+      order_id: a.order_id,
+      symbol: a.symbol,
+      side: a.side,
+      qty: Number(a.qty),
+      price: Number(a.price),
+      transacted_at: a.transaction_time,
+    }));
+  if (fillRows.length) {
+    must("ai_fills upsert", await admin.from("ai_fills").upsert(fillRows, { onConflict: "activity_id", ignoreDuplicates: true }));
+  }
+  const allFills = await loadFills<{ book_id: string; order_id: string; symbol: string; side: string; qty: number; price: number; transacted_at: string }>(
+    admin,
+    bookIds,
+    "book_id, order_id, symbol, side, qty, price, transacted_at"
+  );
+  const { shortEntries } = shortOrderIds(ours);
+  return { ours, bookOfOrder, remote, remoteById, recoveryNotes, allFills, shortEntries };
+}
 
 /** How long a run may hold the per-user lock (longer than any function timeout). */
 export const RUN_LOCK_TTL_S = 300;
@@ -1024,4 +1066,180 @@ async function logRun(admin: Admin, bookId: string, mode: RunMode, summary: unkn
 /** Time of the latest fill of `symbol` in the ledger. */
 function lastFillAt(fills: { symbol: string; transacted_at: string }[], symbol: string): string {
   return fills.filter((f) => f.symbol === symbol).reduce((m, f) => (f.transacted_at > m ? f.transacted_at : m), "");
+}
+
+/* ---------------- Close everything in one Rules box ---------------- */
+
+export type CloseOutStatus = "preview" | "skipped" | "queued" | "working" | "filled" | "rejected";
+
+export interface CloseOutLine extends CloseOutItem {
+  status: CloseOutStatus;
+  detail: string;
+  mark: number | null;
+  orderId?: string;
+  clientId?: string;
+}
+
+export interface CloseOutEntryLine {
+  symbol: string;
+  id: string;
+  side: string;
+  qty: number;
+  status: "preview" | "cancelled" | "failed";
+  detail: string;
+}
+
+export interface CloseOutResult {
+  book: string;
+  dry: boolean;
+  marketOpen: boolean;
+  items: CloseOutLine[];
+  entries: CloseOutEntryLine[];
+  note?: string;
+}
+
+/**
+ * Close one Rules box (mylist | free): cancel its own working orders on each held symbol, then close only
+ * its own ledger quantity at market (see ./closeout for the plan and the skip rules). Works while the box is
+ * switched off. `dry` computes the plan (the confirm list) and places / cancels nothing.
+ *
+ * Same path as a run: the user's paper keys from Vault, the paper-account check, the per-user run lock
+ * (a scheduled run and this can't overlap), the ledger sync, closeAtMarket() for the orders, and an ai_runs
+ * row (mode "manual", phase CLOSE) so the box's history shows it. `confirmed` limits the close to what the
+ * owner saw in the confirm list.
+ */
+export async function closeOutBook(opts: {
+  admin: Admin;
+  userId: string;
+  bookKey: "mylist" | "free";
+  dry: boolean;
+  confirmed?: ConfirmedItem[];
+}): Promise<CloseOutResult> {
+  const { admin, userId, bookKey, dry } = opts;
+  const { data: booksData, error: booksErr } = await admin
+    .from("ai_books")
+    .select("id, user_id, key, name, start_cash, created_at, settings")
+    .eq("user_id", userId)
+    .in("key", ["mylist", "free"]);
+  if (booksErr) throw new Error(booksErr.message);
+  const books = (booksData ?? []) as BookRow[];
+  const book = books.find((b) => b.key === bookKey);
+  if (!book) throw new Error("no such box");
+
+  const creds = await loadCreds(admin, userId);
+  if (!creds) throw new Error("Connect your Alpaca paper account first.");
+  const lock = dry ? { ok: true as const, note: null } : await takeRunLock(admin, userId);
+  if (!lock.ok) throw new Error("Another run (the scheduled one or a second click) is in progress — try again in a minute.");
+  try {
+    // Safety first: paper key + paper account, or nothing happens.
+    await A.getPaperAccount(creds);
+    const clock = await A.getClock(creds);
+    const today = etDate(new Date(clock.timestamp));
+    const { ours, remote, remoteById, allFills, shortEntries } = await syncLedger(admin, books, creds);
+
+    const { list: adjustments } = await loadAdjustments(admin, [book.id]);
+    const st = bookState(baselineOf(book.start_cash, adjustments, book.id), ledgerFills(allFills.filter((f) => f.book_id === book.id), shortEntries));
+    const ledgerFilled = new Map<string, number>();
+    for (const f of allFills) ledgerFilled.set(f.order_id, (ledgerFilled.get(f.order_id) ?? 0) + Number(f.qty));
+    let account: A.Position[] | null = null;
+    try {
+      account = await A.getPositions(creds);
+    } catch {
+      account = null; // planCloseOut then skips every symbol: never close without the quantity check
+    }
+    let plan = planCloseOut({ key: book.key, positions: st.positions.values(), remote, rows: ours.filter((o) => o.book_id === book.id), ledgerFilled, account });
+    if (opts.confirmed) plan = matchConfirmed(plan, opts.confirmed);
+    const markOf = (s: string) => {
+      const a = account?.find((x) => x.symbol === s);
+      const v = a ? Number(a.current_price) : NaN;
+      return Number.isFinite(v) && v > 0 ? v : (st.positions.get(s)?.avgCost ?? null);
+    };
+
+    const items: CloseOutLine[] = plan.items.map((it) => ({
+      ...it,
+      mark: markOf(it.symbol),
+      status: it.skip ? "skipped" : "preview",
+      detail:
+        it.skip ??
+        `${it.side === "sell" ? "sell" : "buy to cover"} ${it.qty} at market${it.cancel.length ? `, after cancelling ${it.cancel.length} of this box's own order${it.cancel.length === 1 ? "" : "s"} on it` : ""}`,
+    }));
+    const entries: CloseOutEntryLine[] = plan.entries.map((e) => ({ ...e, status: "preview", detail: "resting entry — cancelled so it can't re-open a position" }));
+    const result: CloseOutResult = { book: book.name, dry, marketOpen: clock.is_open, items, entries, note: lock.note ?? undefined };
+    if (dry) return result;
+
+    const ctx = { admin, creds, remoteById, today };
+    for (const e of entries) {
+      try {
+        await A.cancelOrder(creds, e.id);
+        const { error } = await admin.from("ai_orders").update({ status: "canceled" }).eq("alpaca_order_id", e.id);
+        e.status = "cancelled";
+        e.detail = error ? `cancelled at Alpaca but not recorded (${error.message}) — the next sync fixes it` : "resting entry cancelled";
+      } catch (err) {
+        e.status = "failed";
+        e.detail = `cancel rejected by Alpaca: ${err instanceof Error ? err.message : String(err)}`;
+      }
+    }
+    for (const it of items) {
+      if (it.skip) continue;
+      const verb = it.side === "sell" ? "sell" : "buy-to-cover";
+      try {
+        const { order, clientId, note } = await closeAtMarket(ctx, book, it.symbol, it.qty, it.side, CLOSE_OUT_REASON, it.cancel);
+        it.orderId = order.id;
+        it.clientId = clientId;
+        let o = order;
+        // During the session a market order usually fills at once: look for a second or two.
+        for (let i = 0; clock.is_open && i < 4 && o.status !== "filled"; i++) {
+          await sleep(500);
+          o = await A.getOrder(creds, order.id).catch(() => o);
+        }
+        if (o.status === "filled") {
+          it.status = "filled";
+          it.detail = `${verb} filled at $${Number(o.filled_avg_price).toFixed(2)} (${clientId})`;
+        } else if (!clock.is_open) {
+          it.status = "queued";
+          it.detail = `market closed — ${verb} queued for the open (${clientId})`;
+        } else {
+          it.status = "working";
+          it.detail = `${verb} placed at market, not filled yet (${o.status}, ${clientId})`;
+        }
+        if (note) it.detail += ` · ${note}`;
+      } catch (err) {
+        it.status = "rejected";
+        it.detail = `${verb} rejected by Alpaca: ${err instanceof Error ? err.message : String(err)} — if its stop was cancelled, the next scheduled run places a new one`;
+      }
+    }
+
+    const decisions: Decision[] = [
+      ...entries.map((e): Decision => ({ symbol: e.symbol, action: e.status === "failed" ? "skip" : "cancel", qty: e.qty, reason: `close-out: ${e.detail}` })),
+      ...items.map((it): Decision => ({
+        symbol: it.symbol,
+        action: it.status === "skipped" || it.status === "rejected" ? "skip" : it.side === "sell" ? "sell" : "cover",
+        qty: it.qty,
+        price: it.mark ?? undefined,
+        reason: `close-out: ${it.detail}`,
+      })),
+    ];
+    let value = 0;
+    for (const p of st.positions.values()) value += p.qty * (markOf(p.symbol) ?? p.avgCost);
+    const sent = items.filter((i) => i.orderId).length;
+    const cancelled = entries.filter((e) => e.status === "cancelled").length;
+    const summary: RunSummary = {
+      book: book.name,
+      mode: "manual",
+      phase: "CLOSE",
+      equity: round2(st.cash + value),
+      cash: round2(st.cash),
+      available: round2(st.cash),
+      note:
+        `Owner closed everything in this box: ${sent} of ${items.length} position${items.length === 1 ? "" : "s"} sent to close` +
+        (sent && !clock.is_open ? " (market closed — queued for the open)" : "") +
+        (entries.length ? `; ${cancelled} resting entr${cancelled === 1 ? "y" : "ies"} cancelled` : "") +
+        ".",
+      decisions,
+    };
+    await logRun(admin, book.id, "manual", summary, null);
+    return result;
+  } finally {
+    if ("runId" in lock && lock.runId) await releaseRunLock(admin, userId, lock.runId);
+  }
 }

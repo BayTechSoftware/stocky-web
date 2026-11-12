@@ -3,7 +3,8 @@
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { computeSignalsForSymbols, hasAttemptedAt, lastTry } from "@/lib/refresh";
-import { loadCreds, runAiTrader as runAiTraderEngine } from "@/lib/aitrader/engine";
+import { closeOutBook, loadCreds, runAiTrader as runAiTraderEngine, type CloseOutResult } from "@/lib/aitrader/engine";
+import type { ConfirmedItem } from "@/lib/aitrader/closeout";
 import { RUNNER_LIMITS, defsForBook, effective, overridesOnly, validateLimits } from "@/lib/aitrader/limits";
 import type { AiRun } from "@/lib/aitrader/view";
 import { planLiveSync, syncWindow, type KnownOrder } from "@/lib/aitrader/live";
@@ -288,6 +289,41 @@ export async function runAiTrader(
   }
 }
 
+/**
+ * "Close everything in this box" for a Rules box (mylist / free), even while it's switched off.
+ * `preview` returns what would be closed (the confirm list) and places nothing; otherwise it closes only
+ * what the owner confirmed (symbol, side, qty), only the box's own shares and orders. The box must be the
+ * signed-in user's (RLS read, then the engine reads it again by user id); the keys come from Vault.
+ */
+export async function closeRulesBox(
+  bookKey: string,
+  step: { preview: true } | { preview: false; confirmed: ConfirmedItem[] }
+): Promise<{ result: CloseOutResult } | { error: string }> {
+  const { supabase, user } = await uid();
+  if (!user) return { error: "not signed in" };
+  if (bookKey !== "mylist" && bookKey !== "free") return { error: "only the Rules boxes can be closed from here" };
+  // RLS: only finds the user's own book.
+  const { data: book, error: bookErr } = await supabase.from("ai_books").select("id, key").eq("key", bookKey).eq("user_id", user.id).maybeSingle();
+  if (bookErr) return { error: bookErr.message };
+  if (!book) return { error: "no such book" };
+  const confirmed = step.preview ? undefined : cleanConfirmed(step.confirmed);
+  try {
+    const result = await closeOutBook({ admin: createAdminClient(), userId: user.id, bookKey, dry: step.preview, confirmed });
+    if (!step.preview) revalidatePath("/dashboard");
+    return { result };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/** The confirm list as sent by the browser: well-formed rows only. */
+function cleanConfirmed(raw: unknown): ConfirmedItem[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((r): r is ConfirmedItem => !!r && typeof r.symbol === "string" && (r.side === "sell" || r.side === "buy") && typeof r.qty === "number" && Number.isFinite(r.qty) && r.qty > 0)
+    .slice(0, 200)
+    .map((r) => ({ symbol: r.symbol, side: r.side, qty: r.qty }));
+}
 
 /* ---------------- AI Trader: paper account + limits ---------------- */
 
