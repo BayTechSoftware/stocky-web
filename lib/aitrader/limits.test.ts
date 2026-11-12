@@ -43,13 +43,13 @@ describe("contract tables", () => {
         "lesson_min_trades", "enabled",
         "board", "board_top_n", "inplay_min_price", "inplay_min_change_pct", "inplay_min_rvol", "target_r",
         "board_regime", "regime_pct", "board_setups", "stop_max_datr", "board_wakes_per_symbol", "board_rewake_datr",
-        "board_watch_n", "early_or_minutes", "max_chase_r",
+        "board_watch_n", "early_or_minutes", "max_chase_r", "premarket_min_vol_pct",
       ].sort()
     );
     expect(keys(RUNNER_LIMITS)).toEqual(
       [
         "model", "interval_min", "weekly_cap_usd", "throttle_pct", "throttle_interval_min", "run_timeout_s",
-        "wake_min_gap_min", "news_ticker_cooldown_min", "news_wake", "news_scope", "news_tags", "premarket_early", "premarket_time", "flatten_lead_min", "web_news",
+        "wake_min_gap_min", "news_ticker_cooldown_min", "news_wake", "news_scope", "news_wakes_per_day", "news_tags", "premarket_early", "premarket_time", "flatten_lead_min", "web_news",
       ].sort()
     );
     expect(keys(RULES_LIMITS)).toEqual(
@@ -442,6 +442,11 @@ describe("in-play board settings (docs/SETTINGS_CONTRACT.md + bin/limits.py, fea
     expect(d("memory_trades").def).toBe(0);
     expect(d("entry_orders").def).toBe("all");
     expect(RUNNER_LIMITS.find((x) => x.key === "news_ticker_cooldown_min")).toMatchObject({ def: 60, min: 0, max: 600, int: true });
+    // docs/SETTINGS_CONTRACT.md + bin/limits.py (stocky-trader main 09c6e5e)
+    expect(row("premarket_min_vol_pct")).toEqual(["number", 0.3, 0, 100]);
+    expect(d("premarket_min_vol_pct")).toMatchObject({ unit: "%", label: "Minimum pre-market volume" });
+    expect(RUNNER_LIMITS.find((x) => x.key === "news_wakes_per_day")).toMatchObject({ kind: "number", def: 20, min: 0, max: 500, int: true });
+    expect(RUNNER_LIMITS.find((x) => x.key === "news_scope")).toMatchObject({ kind: "select", def: "held_and_list", options: ["held", "held_and_list", "market"] });
   });
 
   it("the whole default form saves nothing (no default is written over the Mac's)", () => {
@@ -472,6 +477,13 @@ describe("in-play board settings (docs/SETTINGS_CONTRACT.md + bin/limits.py, fea
     expect(ok(validateLimits(CLAUDE_LIMITS, { early_or_minutes: 2 }))).toEqual({ early_or_minutes: "2" });
     expect(validateLimits(CLAUDE_LIMITS, { early_or_minutes: "4" }).ok).toBe(false);
     expect(ok(validateLimits(CLAUDE_LIMITS, { max_chase_r: "9" }))).toEqual({ max_chase_r: 5 });
+    expect(ok(validateLimits(CLAUDE_LIMITS, { premarket_min_vol_pct: "0" }))).toEqual({ premarket_min_vol_pct: 0 }); // 0 = no minimum
+    expect(ok(validateLimits(CLAUDE_LIMITS, { premarket_min_vol_pct: "250" }))).toEqual({ premarket_min_vol_pct: 100 });
+    expect(ok(validateLimits(RUNNER_LIMITS, { news_scope: "market" }))).toEqual({ news_scope: "market" });
+    expect(validateLimits(RUNNER_LIMITS, { news_scope: "everything" }).ok).toBe(false);
+    expect(ok(validateLimits(RUNNER_LIMITS, { news_wakes_per_day: "0" }))).toEqual({ news_wakes_per_day: 0 }); // 0 = no limit
+    expect(ok(validateLimits(RUNNER_LIMITS, { news_wakes_per_day: "999" }))).toEqual({ news_wakes_per_day: 500 });
+    expect(ok(validateLimits(RUNNER_LIMITS, { news_wakes_per_day: "12.6" }))).toEqual({ news_wakes_per_day: 13 });
     expect(ok(validateLimits(CLAUDE_LIMITS, { max_chase_r: "0" }))).toEqual({ max_chase_r: 0 }); // 0 = no limit
     expect(ok(validateLimits(CLAUDE_LIMITS, { max_chase_r: "0.75" }))).toEqual({ max_chase_r: 0.75 });
     expect(ok(validateLimits(RUNNER_LIMITS, { news_ticker_cooldown_min: "0" }))).toEqual({ news_ticker_cooldown_min: 0 });
@@ -488,7 +500,7 @@ describe("in-play board settings (docs/SETTINGS_CONTRACT.md + bin/limits.py, fea
 
   it("is a Claude-box-only group, in its own section; target_r sits with the exits", () => {
     expect(defsForBook("free").some((x) => x.group === "In-play board")).toBe(false);
-    expect(defsForBook("claude-free").filter((x) => x.group === "In-play board")).toHaveLength(14);
+    expect(defsForBook("claude-free").filter((x) => x.group === "In-play board")).toHaveLength(15);
     expect(sectionOf(d("board_setups"))).toBe("In-play board");
     expect(sectionOf(d("target_r"))).toBe("Exits");
   });

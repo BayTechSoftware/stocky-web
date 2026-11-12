@@ -73,7 +73,7 @@ const ORDER = [
   // How it decides
   "entry_orders", "scorecard", "min_score",
   // In-play board
-  "board", "board_top_n", "board_watch_n", "board_setups", "early_or_minutes", "board_regime", "regime_pct", "inplay_min_change_pct", "inplay_min_rvol", "inplay_min_price", "stop_max_datr", "max_chase_r",
+  "board", "board_top_n", "board_watch_n", "board_setups", "early_or_minutes", "board_regime", "regime_pct", "inplay_min_change_pct", "inplay_min_rvol", "premarket_min_vol_pct", "inplay_min_price", "stop_max_datr", "max_chase_r",
   // Checks
   "market_read", "bear_mode", "bear_block_conf", "bear_fail_closed", "bear_model", "memory_trades",
   // Learning
@@ -83,7 +83,7 @@ const ORDER = [
   "partial_pct", "partial_r", "time_stop_mode", "time_stop_min", "time_stop_min_r", "market_turn_mode", "market_turn_pct",
   // Schedule & cost
   "model", "interval_min", "weekly_cap_usd", "throttle_pct", "throttle_interval_min", "premarket_early", "premarket_time",
-  "news_wake", "news_scope", "wake_min_gap_min", "news_ticker_cooldown_min", "web_news",
+  "news_wake", "news_scope", "news_wakes_per_day", "wake_min_gap_min", "news_ticker_cooldown_min", "web_news",
 ];
 
 export function sortDefs(defs: LimitDef[]): LimitDef[] {
@@ -137,6 +137,8 @@ const SHOW_IF: Record<string, (v: Record<string, string>) => boolean> = {
   throttle_interval_min: (v) => pos(v.throttle_pct) && pos(v.weekly_cap_usd),
   wake_min_gap_min: (v) => on(v.news_wake),
   news_ticker_cooldown_min: (v) => on(v.news_wake),
+  news_wakes_per_day: (v) => on(v.news_wake),
+  premarket_min_vol_pct: (v) => on(v.board),
   board_top_n: (v) => on(v.board),
   inplay_min_price: (v) => on(v.board),
   inplay_min_change_pct: (v) => on(v.board),
