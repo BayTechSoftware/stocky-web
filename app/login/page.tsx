@@ -27,6 +27,22 @@ export default function LoginPage() {
     router.refresh();
   }
 
+  async function onForgot() {
+    if (!email) {
+      setMsg("Enter your e-mail above first.");
+      return;
+    }
+    setBusy(true);
+    setMsg(null);
+    const supabase = createClient();
+    // Result deliberately ignored: never reveal whether an account exists for this address.
+    await supabase.auth
+      .resetPasswordForEmail(email, { redirectTo: `${location.origin}/set-password` })
+      .catch(() => undefined);
+    setBusy(false);
+    setMsg("If that email has an account, a link is on its way.");
+  }
+
   return (
     <div className="flex flex-1 items-center justify-center bg-zinc-50 px-4">
       <div className="w-full max-w-sm rounded-2xl border border-zinc-200 bg-white p-8 shadow-sm">
@@ -59,6 +75,15 @@ export default function LoginPage() {
             {busy ? "…" : "Sign in"}
           </button>
         </form>
+
+        <button
+          type="button"
+          onClick={onForgot}
+          disabled={busy}
+          className="mt-3 text-sm text-zinc-500 underline hover:text-zinc-900 disabled:opacity-50"
+        >
+          Forgot password?
+        </button>
 
         {msg && <p className="mt-3 text-sm text-amber-700">{msg}</p>}
       </div>
