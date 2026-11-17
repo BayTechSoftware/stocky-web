@@ -86,9 +86,11 @@ create policy "history read authenticated" on public.signal_history
 create table if not exists public.ai_books (
   id          uuid primary key default gen_random_uuid(),
   user_id     uuid not null references auth.users (id) on delete cascade,
-  key         text not null check (key in ('mylist','free')),
+  key         text not null constraint ai_books_key_check
+                check (key in ('mylist','free','claude-mylist','claude-free','claude-day','claude-long')),
   name        text not null,
   start_cash  double precision not null check (start_cash > 0),
+  hidden      boolean not null default false, -- left out of the AI tab's tabs/totals; Rules cron skips it (supabase/day_long.sql)
   created_at  timestamptz not null default now(),
   unique (user_id, key)
 );

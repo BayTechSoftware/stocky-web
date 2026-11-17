@@ -37,6 +37,7 @@ const GROUP_SECTION: Record<string, SettingsSection> = {
   Schedule: "Schedule & cost",
   Usage: "Schedule & cost",
   News: "Schedule & cost",
+  "Overkill indicator": "How it decides",
 };
 
 /** Per-key placement where the data group doesn't say it (keys that exist in one table only). */
@@ -64,14 +65,14 @@ export function sectionOf(d: LimitDef): SettingsSection {
 const ORDER = [
   // Money & risk
   "enabled", "budget", "risk_pct", "max_loss_per_trade_usd", "max_daily_loss_usd", "daily_loss_halt_pct", "max_position_pct",
-  "max_positions", "max_new_per_run", "cash_buffer_pct", "min_reward_risk",
+  "position_pct", "max_positions", "emergency_stop_pct", "max_new_per_run", "cash_buffer_pct", "min_reward_risk",
   "allow_short", "allow_margin", "margin_multiplier", "allow_loosen_stop",
   // When to trade
   "no_entries_before", "no_entries_after", "flat_by", "flatten_backup", "premarket_queue", "queue_ttl_min",
   // What to trade
-  "blocked", "universe_remove", "universe_add", "allow_reentry",
+  "trade_universe", "long_universe", "blocked", "universe_remove", "universe_add", "allow_reentry",
   // How it decides
-  "entry_orders", "scorecard", "min_score",
+  "buy_needs_signal", "entry_orders", "scorecard", "min_score",
   // In-play board
   "board", "board_top_n", "board_watch_n", "board_setups", "early_or_minutes", "board_regime", "regime_pct", "inplay_min_change_pct", "inplay_min_rvol", "premarket_min_vol_pct", "inplay_min_price", "stop_max_datr", "max_chase_r",
   // Checks
@@ -104,6 +105,9 @@ const ADVANCED = new Set([
   "or_minutes", "max_breakout_age_min", "board_watch_n", "early_or_minutes", "inplay_min_price", "regime_pct", "stop_max_datr", "board_wakes_per_symbol", "board_rewake_datr",
   "queue_ttl_min", "flatten_lead_min", "run_timeout_s", "news_tags", "wake_min_gap_min",
 ]);
+
+/** Long-Term Claude's Overkill indicator inputs, folded on their own (same inputs as the TradingView script). */
+export const isIndicator = (d: LimitDef) => d.key.startsWith("ok_");
 
 /** The scorecard weights, folded on their own behind "Fine-tune how the score is calculated". */
 export const isWeight = (d: LimitDef) => d.key.startsWith("w_") && d.key !== "w_sentiment";

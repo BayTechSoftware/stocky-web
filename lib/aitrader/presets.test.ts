@@ -4,7 +4,7 @@ import { PRESETS, matchPreset, presetKeys, presetValues } from "./presets";
 import { isShown, sectionOf, SECTIONS } from "./layout";
 
 describe("presets", () => {
-  for (const key of ["mylist", "free", "claude-mylist", "claude-free"]) {
+  for (const key of ["mylist", "free", "claude-mylist", "claude-free", "claude-day"]) {
     const claude = key.startsWith("claude-");
     const defs = defsForBook(key);
     it(`${key}: Balanced is exactly the defaults`, () => {
@@ -44,7 +44,7 @@ describe("new Claude keys", () => {
 
 describe("settings layout", () => {
   it("puts every field in one of the eight sections", () => {
-    for (const key of ["mylist", "free", "claude-free"]) {
+    for (const key of ["mylist", "free", "claude-free", "claude-day", "claude-long"]) {
       for (const d of defsForBook(key)) expect(SECTIONS, d.key).toContain(sectionOf(d));
     }
   });

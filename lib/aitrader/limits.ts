@@ -9,8 +9,10 @@
  * where a field's hint says so.
  *
  *   RULES_LIMITS  — the Rules boxes (mylist / free), run by lib/aitrader/engine.ts.
- *   CLAUDE_LIMITS — the Claude boxes; the Mac writes them into each book's
+ *   CLAUDE_LIMITS — the Claude day-trading boxes; the Mac writes them into each book's
  *                   trader/config.json before every run.
+ *   DAY_LIMITS    — Day Trader Claude (claude-day): CLAUDE_LIMITS + trade_universe.
+ *   LONG_LIMITS   — Long-Term Claude (claude-long): its own table (no day-trading fields).
  *   RUNNER_LIMITS — how and when the Mac runs Claude (ai_runner.settings).
  */
 
@@ -28,6 +30,8 @@ export interface LimitDef {
   min?: number;
   max?: number;
   int?: boolean; // whole numbers only (rounded)
+  /** number: values snap to this step (e.g. 0.5); the form's input uses it too. */
+  step?: number;
   def: LimitValue;
   /** Per-box default (Rules boxes), resolved by rulesDefs(). */
   defBy?: Partial<Record<BoxKey, LimitValue>>;
@@ -298,6 +302,74 @@ export const CLAUDE_LIMITS: LimitDef[] = [
   ...BOARD_LIMITS,
 ];
 
+/**
+ * Day Trader Claude (claude-day): the same day-trading table as the other Claude boxes, plus which stocks it
+ * may open trades in. Runs on its own Alpaca paper account (keys only on the Mac).
+ */
+export const DAY_LIMITS: LimitDef[] = [
+  ...CLAUDE_LIMITS,
+  { key: "trade_universe", group: "Symbols", label: "Stocks Claude may trade", kind: "select", options: ["free", "watchlist"], optionLabels: { free: "Free choice", watchlist: "Watchlist only" }, def: "free", hint: "Watchlist only: Claude may only open trades in stocks on your watchlist (exits are always allowed)." },
+];
+
+/** Overkill indicator inputs (the owner's TradingView script): same keys' defaults as the script. */
+const OK = "Overkill indicator";
+export const OVERKILL_LIMITS: LimitDef[] = [
+  { key: "ok_wt_ch_len", group: OK, label: "WaveTrend channel length", unit: "", kind: "number", min: 1, max: 100, int: true, def: 9 },
+  { key: "ok_wt_avg_len", group: OK, label: "WaveTrend average length", unit: "", kind: "number", min: 1, max: 100, int: true, def: 12 },
+  { key: "ok_wt_ma_len", group: OK, label: "WaveTrend signal (MA) length", unit: "", kind: "number", min: 1, max: 50, int: true, def: 3 },
+  { key: "ok_lv_lower", group: OK, label: "WaveTrend lower level", unit: "", kind: "number", min: -100, max: 0, def: -45 },
+  { key: "ok_lv_ob", group: OK, label: "WaveTrend overbought level", unit: "", kind: "number", min: 0, max: 100, def: 53 },
+  { key: "ok_lv_os", group: OK, label: "WaveTrend oversold level", unit: "", kind: "number", min: -100, max: 0, def: -53 },
+  { key: "ok_stoch_hit", group: OK, label: "Stochastic RSI extreme", unit: "", kind: "number", min: 50, max: 100, def: 95 },
+  { key: "ok_monthly_any", group: OK, label: "Any monthly signal counts", kind: "bool", def: true },
+  { key: "ok_higher_only", group: OK, label: "Higher time frames only", kind: "bool", def: true },
+  { key: "ok_confirm_only", group: OK, label: "Confirmed signals only", kind: "bool", def: false },
+  { key: "ok_st_len", group: OK, label: "Stochastic length", unit: "", kind: "number", min: 1, max: 100, int: true, def: 14 },
+  { key: "ok_st_rsi", group: OK, label: "Stochastic RSI length", unit: "", kind: "number", min: 1, max: 100, int: true, def: 14 },
+  { key: "ok_st_k", group: OK, label: "Stochastic %K smoothing", unit: "", kind: "number", min: 1, max: 20, int: true, def: 3 },
+  { key: "ok_st_log", group: OK, label: "Stochastic on log prices", kind: "bool", def: true },
+  { key: "ok_rsi_len", group: OK, label: "RSI length", unit: "", kind: "number", min: 1, max: 100, int: true, def: 14 },
+  { key: "ok_div_ob", group: OK, label: "Divergence overbought level", unit: "", kind: "number", min: 0, max: 100, def: 45 },
+  { key: "ok_div_os", group: OK, label: "Divergence oversold level", unit: "", kind: "number", min: -100, max: 0, def: -65 },
+  { key: "ok_div_ob2", group: OK, label: "Divergence overbought level 2", unit: "", kind: "number", min: 0, max: 100, def: 15 },
+  { key: "ok_div_os2", group: OK, label: "Divergence oversold level 2", unit: "", kind: "number", min: -100, max: 0, def: -40 },
+  { key: "ok_mean_years", group: OK, label: "Long-run mean over", unit: "", kind: "number", min: 0.5, max: 10, step: 0.5, def: 4, hint: "years" },
+  { key: "ok_fib_len", group: OK, label: "Fibonacci range length", unit: "", kind: "number", min: 2, max: 1000, int: true, def: 260, hint: "bars" },
+  { key: "ok_star_buy_dd", group: OK, label: "BUY ★: least drop from the 52-week high", unit: "%", kind: "number", min: 0, max: 90, def: 30, hint: "BUY ★ needs the price at least this % under its 52-week high" },
+  { key: "ok_star_sell_prm", group: OK, label: "SELL ★: premium over the long-run mean", unit: "%", kind: "number", min: 0, max: 500, def: 50 },
+  { key: "ok_star_sell_pos", group: OK, label: "SELL ★: position in the Fibonacci range", unit: "", kind: "number", min: 0, max: 1, def: 0.764 },
+  { key: "ok_star_weeks", group: OK, label: "Weeks between ★ signals", unit: "", kind: "number", min: 0, max: 104, int: true, def: 26, hint: "weeks" },
+  { key: "ok_star_repeat", group: OK, label: "Repeat ★ after a further move of", unit: "%", kind: "number", min: 0, max: 90, def: 15 },
+  { key: "ok_sell_again", group: OK, label: "Allow a repeat SELL ★", kind: "bool", def: true },
+  { key: "ok_daily_star", group: OK, label: "Daily ★ signals too", kind: "bool", def: true },
+  { key: "ok_stop_on", group: OK, label: "Stop after a BUY ★", kind: "bool", def: true },
+  { key: "ok_stop_look", group: OK, label: "Stop: look back", unit: "", kind: "number", min: 1, max: 104, int: true, def: 13, hint: "bars" },
+  { key: "ok_stop_buffer", group: OK, label: "Stop: buffer under the low", unit: "%", kind: "number", min: 0, max: 50, def: 0 },
+  { key: "ok_stop_min", group: OK, label: "Stop: at least this far under the entry", unit: "%", kind: "number", min: 0, max: 90, def: 20, hint: "The stop after a BUY ★ is at least this % under the entry" },
+  { key: "ok_stop_weekly", group: OK, label: "Stop: on weekly bars", kind: "bool", def: true },
+  { key: "ok_stop_weeks", group: OK, label: "Stop: keep for", unit: "", kind: "number", min: 1, max: 208, int: true, def: 26, hint: "weeks" },
+];
+
+/**
+ * Long-Term Claude (claude-long): holds for weeks or months on its own Alpaca paper account, runs once a day
+ * before the open. Its own table — none of the day-trading fields.
+ */
+export const LONG_LIMITS: LimitDef[] = [
+  { key: "enabled", group: "Money & risk", label: "Box is on", kind: "bool", def: true, hint: "Off: no new buys; stops and exits keep running." },
+  { key: "budget", group: "Money & risk", label: "Box size", unit: "$", kind: "number", min: 100, max: 1_000_000, def: 10000, hint: "Money this box may use." },
+  { key: "position_pct", group: "Money & risk", label: "Size of each new position", unit: "%", kind: "number", min: 1, max: 100, def: 10, hint: "Each new position is this % of the box's money." },
+  { key: "max_positions", group: "Money & risk", label: "Most stocks held at once", unit: "", kind: "number", min: 0, max: 100, int: true, def: 0, hint: "0 = no limit: keep buying while there is money." },
+  { key: "emergency_stop_pct", group: "Money & risk", label: "Emergency stop under the entry", unit: "%", kind: "number", min: 5, max: 60, def: 25, hint: "Every buy gets a real stop this % under the entry at Alpaca, good until cancelled." },
+  { key: "allow_short", group: "Money & risk", label: "Allow short selling", kind: "bool", def: false, hint: "Long-Term only buys; turn on to let it short on SELL ★." },
+  { key: "long_universe", group: "What to trade", label: "Stocks Claude looks at", kind: "select", options: ["watchlist_large", "watchlist"], optionLabels: { watchlist_large: "Watchlist + 100 large caps", watchlist: "Watchlist only" }, def: "watchlist_large" },
+  { key: "universe_add", group: "What to trade", label: "Also watch", kind: "symbols", def: "", hint: "Extra symbols to watch, comma-separated." },
+  { key: "universe_remove", group: "What to trade", label: "Never buy", kind: "symbols", def: "", hint: "Symbols never to buy, comma-separated." },
+  { key: "run_at", group: "When to trade", label: "Daily look at (NY time)", kind: "time", def: "09:00", tmin: "04:00", tmax: "09:25", hint: "When Claude looks each day (New York time)." },
+  { key: "buy_needs_signal", group: "How it decides", label: "What a buy needs", kind: "select", options: ["off", "any", "star"], optionLabels: { off: "Claude decides", any: "Needs an indicator BUY", star: "Needs a BUY ★" }, def: "off", hint: "Off: Claude may buy on news or other checks too; the indicator is one of its inputs." },
+  { key: "stop_break_sells", group: "Exits", label: "Sell when the indicator's stop breaks", kind: "bool", def: true, hint: "Sell when the indicator's stop breaks on a weekly close (the indicator author's rule)." },
+  ...OVERKILL_LIMITS,
+];
+
 export const RUNNER_LIMITS: LimitDef[] = [
   // Schedule
   { key: "interval_min", group: "Schedule", label: "Claude checks every", unit: "min", kind: "number", min: 1, max: 240, int: true, def: 15, hint: "in market hours" },
@@ -329,6 +401,8 @@ export function rulesDefs(box: BoxKey): LimitDef[] {
 
 /** The form fields for any box key. */
 export function defsForBook(key: string): LimitDef[] {
+  if (key === "claude-day") return DAY_LIMITS;
+  if (key === "claude-long") return LONG_LIMITS;
   if (key.startsWith("claude-")) return CLAUDE_LIMITS;
   return rulesDefs(key === "mylist" ? "mylist" : "free");
 }
@@ -354,6 +428,12 @@ function parseBool(v: unknown): boolean | null {
 }
 
 export type Settings = Record<string, LimitValue>;
+
+/** A clamped number snapped to its field's step, kept inside the bounds. */
+function snap(n: number, d: LimitDef): number {
+  const v = Number((Math.round(n / d.step!) * d.step!).toFixed(10));
+  return Math.min(d.max ?? v, Math.max(d.min ?? v, v));
+}
 
 /**
  * Validate a submitted form into a clean settings object: unknown keys dropped,
@@ -429,7 +509,7 @@ export function validateLimits(
         continue;
       }
       const c = Math.min(d.max ?? n, Math.max(d.min ?? n, n));
-      out[d.key] = d.int ? Math.round(c) : c;
+      out[d.key] = d.int ? Math.round(c) : d.step ? snap(c, d) : c;
     }
   }
 

@@ -8,6 +8,7 @@ import type { ConfirmedItem } from "@/lib/aitrader/closeout";
 import { RUNNER_LIMITS, defsForBook, effective, overridesOnly, validateLimits } from "@/lib/aitrader/limits";
 import type { AiRun } from "@/lib/aitrader/view";
 import { planLiveSync, syncWindow, type KnownOrder } from "@/lib/aitrader/live";
+import { onSharedAccount } from "@/lib/aitrader/boxes";
 import { loadOrders, must } from "@/lib/aitrader/rows";
 import { baselineOf, loadAdjustments, sizeOf } from "@/lib/aitrader/cash";
 import { AlpacaError, getClock, getDailyBars, getPaperAccount, listFills, listOrders, type Bar, type Creds } from "@/lib/alpaca";
@@ -564,8 +565,11 @@ export async function syncLive(): Promise<{ ok: true } | { error: string }> {
   try {
     const creds = await loadCreds(admin, user.id);
     if (!creds) return { ok: true };
-    const { data: books } = await admin.from("ai_books").select("id, key, created_at").eq("user_id", user.id);
-    if (!books?.length) return { ok: true };
+    // Only the books on this (shared) account: claude-day / claude-long trade on their own accounts and
+    // the Mac pushes their ledger — their open orders and fills must not move this account's sync window.
+    const { data: allBooks } = await admin.from("ai_books").select("id, key, created_at").eq("user_id", user.id);
+    const books = (allBooks ?? []).filter((b) => onSharedAccount(String(b.key)));
+    if (!books.length) return { ok: true };
     const ids = books.map((b) => b.id as string);
     const known = await loadOrders<KnownOrder & { created_at: string }>(
       admin,

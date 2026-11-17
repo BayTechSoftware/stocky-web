@@ -1,6 +1,6 @@
 /**
- * Live ledger sync — brings all four books up to date from Alpaca between their
- * runs, so positions and trades show as they happen. Pure planning here (tested);
+ * Live ledger sync — brings the books on the shared paper account up to date from Alpaca between their
+ * runs (claude-day / claude-long trade on their own accounts; the Mac pushes their ledger), so positions and trades show as they happen. Pure planning here (tested);
  * applied by the syncLive server action. Read-only towards Alpaca: nothing is
  * ever placed, cancelled or replaced from this path.
  */
@@ -21,6 +21,8 @@ export interface KnownOrder {
 const OWNERS: [string, string][] = [
   ["claude-mylist-", "claude-mylist"],
   ["claude-free-", "claude-free"],
+  ["claude-day-", "claude-day"],
+  ["claude-long-", "claude-long"],
   ["stk-mylist-", "mylist"],
   ["stk-free-", "free"],
 ];

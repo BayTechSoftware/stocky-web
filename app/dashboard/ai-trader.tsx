@@ -5,6 +5,7 @@ import { money, moneySigned, pct } from "@/lib/portfolio";
 import { RUNNER_LIMITS, boxEnabled, effective } from "@/lib/aitrader/limits";
 import type { SettingsSection } from "@/lib/aitrader/layout";
 import type { AiBookView, AiView } from "@/lib/aitrader/view";
+import { hiddenBooks, isClaudeKey, showSharedAccount, totalsOf, visibleBooks } from "@/lib/aitrader/boxes";
 import { LABEL, claudeNowLine, when } from "./ai-run";
 import { BookCard, col } from "./ai-book";
 import { ConnectCard, OffBadge, UsageMeter } from "./ai-settings";
@@ -18,25 +19,29 @@ function closedToday(b: AiBookView): number | null {
   return closed.length ? closed.reduce((a, t) => a + (t.pnl ?? 0), 0) : null;
 }
 
-/** One cell of the Rules-vs-Claude grid. */
-function GridCell({ b, onOpen }: { b: AiBookView | undefined; onOpen: (key: string) => void }) {
-  if (!b) return <div className="rounded-xl border border-dashed border-border p-3 text-xs text-faint">not set up</div>;
+/** One box in the side-by-side comparison: value, return since its start, open positions, today. */
+function CompareCell({ b, onOpen }: { b: AiBookView; onOpen: (key: string) => void }) {
   const today = closedToday(b);
+  const claude = isClaudeKey(b.key);
   return (
     <button
       onClick={() => onOpen(b.key)}
       className="w-full rounded-xl border border-border bg-surface p-3 text-left transition hover:border-accent/50 hover:bg-surface2/40"
     >
       <div className="flex items-center justify-between gap-2">
-        <div className="font-display text-lg font-semibold text-text tnum">{money(b.equity, 2)}</div>
+        <span className="flex min-w-0 items-center gap-1.5">
+          <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${claude ? "bg-accent" : "bg-faint"}`} aria-hidden />
+          <span className="truncate text-xs font-semibold text-dim">{b.name}</span>
+        </span>
         {!boxEnabled(b.settings) && <OffBadge />}
       </div>
+      <div className="mt-1 font-display text-lg font-semibold text-text tnum">{money(b.equity, 2)}</div>
       <div className={`font-mono text-xs tnum ${col(b.pnl)}`}>
-        {moneySigned(b.pnl, 2)} ({pct(b.pnlPct)}) all time
+        {pct(b.pnlPct)} since start <span className="text-faint">({moneySigned(b.pnl, 2)})</span>
       </div>
       <div className="mt-1 font-mono text-[11px] text-dim tnum">
-        today <span className={today != null ? col(today) : ""}>{today != null ? moneySigned(today, 2) : "—"}</span> ·{" "}
-        {b.positions.length} open
+        {b.positions.length} open · today (closed){" "}
+        <span className={today != null ? col(today) : ""}>{today != null ? moneySigned(today, 2) : "—"}</span>
       </div>
     </button>
   );
@@ -73,19 +78,19 @@ export default function AiTrader({ ai }: { ai: AiView | null }) {
     );
   }
 
-  const books = ai.books;
-  const total = books.reduce((a, b) => a + b.equity, 0);
-  const startTotal = books.reduce((a, b) => a + b.startCash, 0);
-  const allTime = total - startTotal;
+  // Hidden boxes (ai_books.hidden) stay loaded but are left out of the tabs, totals and comparisons.
+  const books = visibleBooks(ai.books);
+  const hidden = hiddenBooks(ai.books);
+  const { equity: total, start: startTotal, pnl: allTime, pnlPct: allTimePct } = totalsOf(books);
   const todays = books.map(closedToday).filter((x): x is number => x != null);
   const today = todays.length ? todays.reduce((a, x) => a + x, 0) : null;
-  const claudeBooks = books.filter((b) => b.key.startsWith("claude-"));
-  // weekCostUsd is the runner's weekly usage; add up the Claude boxes only (Rules boxes carry none).
+  const claudeBooks = books.filter((b) => isClaudeKey(b.key));
+  const rulesCount = books.length - claudeBooks.length;
+  // weekCostUsd is the runner's weekly usage; add up the visible Claude boxes only (Rules boxes carry none).
   const weekCost = claudeBooks.reduce((a, b) => a + b.weekCostUsd, 0);
   const sizes = Array.from(new Set(books.map((b) => b.startCash)));
   const model = String(effective(RUNNER_LIMITS, ai.runner).model);
   const current = books.find((b) => b.key === open.tab) ?? null;
-  const byKey = (k: string) => books.find((b) => b.key === k);
 
   return (
     <section className="mt-3 space-y-4">
@@ -98,19 +103,21 @@ export default function AiTrader({ ai }: { ai: AiView | null }) {
         </div>
         <h2 className="mt-1.5 font-display text-xl font-semibold text-text">AI Trader</h2>
         <p className="mt-0.5 text-sm text-dim">
-          {books.length} paper boxes{sizes.length === 1 ? ` of ${money(sizes[0])} each` : ` (${money(startTotal)} in all)`}:
-          two run by fixed rules, two by Claude {model}. Open a box for its details and settings.
+          {books.length} paper box{books.length === 1 ? "" : "es"}
+          {sizes.length === 1 ? ` of ${money(sizes[0])}${books.length === 1 ? "" : " each"}` : ` (${money(startTotal)} in all)`}:{" "}
+          {rulesCount ? `${rulesCount} run by fixed rules, ${claudeBooks.length} by Claude ${model}` : `run by Claude ${model}`}. Open a
+          box for its details and settings.
         </p>
 
         <div className="mt-4 grid grid-cols-2 gap-x-6 gap-y-3 border-t border-border pt-4 sm:flex sm:flex-wrap sm:items-end sm:gap-x-10">
           <div className="col-span-2">
-            <div className={LABEL}>Total (all 4 boxes)</div>
+            <div className={LABEL}>Total ({books.length === 1 ? "1 box" : `${books.length} boxes`})</div>
             <div className="font-display text-2xl font-semibold text-text tnum">{money(total, 2)}</div>
           </div>
           <div>
             <div className={LABEL}>All time</div>
             <div className={`font-mono text-sm font-semibold tnum ${col(allTime)}`}>
-              {moneySigned(allTime, 2)} <span className="font-normal">({pct(startTotal ? (total / startTotal - 1) * 100 : 0)})</span>
+              {moneySigned(allTime, 2)} <span className="font-normal">({pct(allTimePct)})</span>
             </div>
             <div className="text-[11px] text-faint">vs {money(startTotal)} to start</div>
           </div>
@@ -123,8 +130,8 @@ export default function AiTrader({ ai }: { ai: AiView | null }) {
           </div>
           {/* TODO(data): "Market (SPY) today" needs today's SPY move in AiView; only past reviews carry it. */}
           <div className="col-span-2 text-xs text-faint sm:ml-auto sm:text-right">
-            {ai.accountEquity != null && (
-              <div className="font-mono tnum">Alpaca paper account (shared by all 4 boxes) {money(ai.accountEquity, 2)}</div>
+            {ai.accountEquity != null && showSharedAccount(books) && (
+              <div className="font-mono tnum">Old shared Alpaca paper account {money(ai.accountEquity, 2)}</div>
             )}
             <div>{ai.prices === "live" ? "live prices" : "prices as of the Mac's last Claude run"}</div>
           </div>
@@ -134,7 +141,7 @@ export default function AiTrader({ ai }: { ai: AiView | null }) {
 
       <nav className="-mx-4 overflow-x-auto px-4 md:mx-0 md:px-0" aria-label="AI Trader boxes">
         <div className="flex min-w-max gap-1 rounded-xl border border-border bg-surface p-1">
-          {[{ key: "overview", name: "Overview", isClaude: null as boolean | null, pnl: null as number | null, off: false }, ...books.map((b) => ({ key: b.key as string, name: b.name, isClaude: b.key.startsWith("claude-"), pnl: b.pnl, off: !boxEnabled(b.settings) }))].map((t) => {
+          {[{ key: "overview", name: "Overview", isClaude: null as boolean | null, pnl: null as number | null, off: false }, ...books.map((b) => ({ key: b.key as string, name: b.name, isClaude: isClaudeKey(b.key), pnl: b.pnl, off: !boxEnabled(b.settings) }))].map((t) => {
             const on = (current?.key ?? "overview") === t.key;
             return (
               <button
@@ -166,21 +173,18 @@ export default function AiTrader({ ai }: { ai: AiView | null }) {
         />
       ) : (
         <>
-          {/* Rules vs Claude, side by side */}
-          <div className="card rounded-2xl border border-border bg-surface p-4 md:p-5">
-            <h3 className="font-display text-sm font-semibold text-text">Rules vs Claude</h3>
-            <div className="mt-3 grid grid-cols-[auto_minmax(0,1fr)_minmax(0,1fr)] items-center gap-2">
-              <span />
-              <span className={LABEL}>My List</span>
-              <span className={LABEL}>Free Choice</span>
-              <span className="pr-1 text-xs font-semibold text-dim">Rules</span>
-              <GridCell b={byKey("mylist")} onOpen={pick} />
-              <GridCell b={byKey("free")} onOpen={pick} />
-              <span className="pr-1 text-xs font-semibold text-accent">Claude</span>
-              <GridCell b={byKey("claude-mylist")} onOpen={pick} />
-              <GridCell b={byKey("claude-free")} onOpen={pick} />
+          {/* The visible boxes side by side (Day Trader Claude vs Long-Term Claude first) */}
+          {books.length > 0 && (
+            <div className="card rounded-2xl border border-border bg-surface p-4 md:p-5">
+              <h3 className="font-display text-sm font-semibold text-text">Side by side</h3>
+              <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                {books.map((b) => (
+                  <CompareCell key={b.key} b={b} onOpen={pick} />
+                ))}
+              </div>
+              <p className="mt-2 text-[11px] text-faint">SPY comparison: coming</p>
             </div>
-          </div>
+          )}
 
           {/* What each Claude box is doing, and this week's usage */}
           {claudeBooks.length > 0 && (
@@ -233,12 +237,25 @@ export default function AiTrader({ ai }: { ai: AiView | null }) {
           <details className="text-xs text-dim">
             <summary className="cursor-pointer select-none text-faint hover:text-text">How it works</summary>
             <p className="mt-1.5 max-w-prose leading-relaxed">
-              <b>Rules</b> boxes are fixed code that runs on the website on weekday schedules. <b>Claude</b> boxes are
-              Claude day-trading on your Mac during market hours: it scans, reads the news, times each buy and manages each
-              sell. Every limit is yours to set in each box&apos;s Settings. Open any Claude run to see every step.
+              <b>Claude</b> boxes run on your Mac. Day Trader Claude day-trades during market hours on its own paper
+              account: it scans, reads the news, times each buy and manages each sell. Long-Term Claude, on its own paper
+              account too, looks once a day before the open and holds for weeks or months, guided by your Overkill
+              indicator. <b>Rules</b> boxes are fixed code that runs on the website on weekday schedules. Every limit is
+              yours to set in each box&apos;s Settings. Open any Claude run to see every step.
             </p>
           </details>
         </>
+      )}
+
+      {hidden.length > 0 && (
+        <details className="text-xs text-dim">
+          <summary className="cursor-pointer select-none text-faint hover:text-text">Hidden boxes ({hidden.length})</summary>
+          <ul className="mt-1.5 space-y-0.5">
+            {hidden.map((b) => (
+              <li key={b.key}>{b.name}</li>
+            ))}
+          </ul>
+        </details>
       )}
 
       <p className="text-[11px] leading-relaxed text-faint">

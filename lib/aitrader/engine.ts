@@ -238,11 +238,12 @@ export async function loadCreds(admin: Admin, userId: string): Promise<A.Creds |
 export async function runAiTrader(opts: { admin: Admin; mode: RunMode; userId?: string }): Promise<RunSummary[]> {
   const { admin, mode } = opts;
 
-  // Only the two rules books — the "claude-*" books are run by Claude on the Mac.
+  // Only the two rules books — the "claude-*" books are run by Claude on the Mac. Hidden boxes never run.
   let bq = admin
     .from("ai_books")
     .select("id, user_id, key, name, start_cash, created_at, settings")
-    .in("key", ["mylist", "free"]);
+    .in("key", ["mylist", "free"])
+    .eq("hidden", false);
   if (opts.userId) bq = bq.eq("user_id", opts.userId);
   const { data: booksData, error: booksErr } = await bq;
   if (booksErr) throw new Error(booksErr.message);

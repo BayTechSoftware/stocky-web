@@ -4,7 +4,7 @@ import { useState, useTransition, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { connectAlpaca, disconnectAlpaca, resetBookLimits, saveBookLimits, saveRunnerSettings } from "../actions";
 import { effective, parseSymbols, type LimitDef, type LimitValue } from "@/lib/aitrader/limits";
-import { SECTIONS, isAdvanced, isShown, isWeight, sectionOf, sortDefs, type SettingsSection } from "@/lib/aitrader/layout";
+import { SECTIONS, isAdvanced, isIndicator, isShown, isWeight, sectionOf, sortDefs, type SettingsSection } from "@/lib/aitrader/layout";
 import { PRESETS, matchPreset, presetValues, type PresetId } from "@/lib/aitrader/presets";
 import { LABEL } from "./ai-run";
 
@@ -215,7 +215,7 @@ function Field({ d, value, set }: { d: LimitDef; value: string; set: (v: string)
         onChange={(e) => set(e.target.value)}
         min={d.min}
         max={d.max}
-        step={d.int ? 1 : "any"}
+        step={d.int ? 1 : (d.step ?? "any")}
         className={INPUT}
       />
       {unitAfter(d) && <span className="font-mono text-xs text-faint">{unitAfter(d)}</span>}
@@ -275,9 +275,10 @@ function FieldList({
   const row = (d: LimitDef) => <Row key={d.key} d={d} value={vals[d.key] ?? toForm(d, d.def)} set={(v) => set(d.key, v)} extra={extras?.[d.key]} />;
   const grid = (ds: LimitDef[]) => <div className="grid gap-x-6 gap-y-4 sm:grid-cols-2">{ds.map(row)}</div>;
   if (onlyChanged) return shown.length ? grid(shown) : null;
-  const main = shown.filter((d) => !isAdvanced(d, claude) && !isWeight(d));
+  const main = shown.filter((d) => !isAdvanced(d, claude) && !isWeight(d) && !isIndicator(d));
   const adv = shown.filter((d) => isAdvanced(d, claude));
   const weights = shown.filter((d) => isWeight(d));
+  const indicator = shown.filter((d) => isIndicator(d));
   const changedIn = (ds: LimitDef[]) => ds.filter((d) => !isDefault(d, vals[d.key])).length;
   return (
     <div className="space-y-4">
@@ -288,6 +289,18 @@ function FieldList({
             Advanced ({adv.length}){changedIn(adv) ? <span className="ml-1 text-accent">· {changedIn(adv)} changed</span> : null}
           </summary>
           <div className="border-t border-border p-3">{grid(adv)}</div>
+        </details>
+      )}
+      {indicator.length > 0 && (
+        <details className="rounded-lg border border-border">
+          <summary className="cursor-pointer select-none px-3 py-2 text-[13px] font-medium text-dim hover:text-text">
+            Overkill indicator settings ({indicator.length})
+            {changedIn(indicator) ? <span className="ml-1 text-accent">· {changedIn(indicator)} changed</span> : null}
+          </summary>
+          <div className="border-t border-border p-3">
+            <p className="mb-3 text-xs leading-snug text-dim">Same inputs and defaults as your TradingView script.</p>
+            {grid(indicator)}
+          </div>
         </details>
       )}
       {weights.length > 0 && (
@@ -318,11 +331,22 @@ function resetKeepingSize(bookKey: string, _budget: number): Promise<Result> {
 
 /* ---------------- a box's Settings section ---------------- */
 
-const NOT_APPLICABLE: Partial<Record<SettingsSection, { rules?: string; claude?: string }>> = {
+type BoxType = "rules" | "claude" | "long";
+
+const NOT_APPLICABLE: Partial<Record<SettingsSection, Partial<Record<BoxType, string>>>> = {
   "When to trade": { rules: "Rules boxes run on fixed weekday schedules; there is no buying window to set." },
-  "In-play board": { rules: "Doesn't apply: Rules boxes follow their own list and signals; only the Claude · Free Choice box uses the board." },
-  Checks: { rules: "Doesn't apply: Rules boxes buy on fixed signals, with no scorecard or second opinion." },
-  Learning: { rules: "Doesn't apply: Rules boxes don't learn; they follow these settings exactly." },
+  "In-play board": {
+    rules: "Doesn't apply: Rules boxes follow their own list and signals; only the Claude day-trading boxes use the board.",
+    long: "Doesn't apply: Long-Term Claude doesn't day-trade; it looks once a day and uses your Overkill indicator instead.",
+  },
+  Checks: {
+    rules: "Doesn't apply: Rules boxes buy on fixed signals, with no scorecard or second opinion.",
+    long: "Nothing to set here: Long-Term Claude has no day-trading scorecard. What a buy needs is under How it decides.",
+  },
+  Learning: {
+    rules: "Doesn't apply: Rules boxes don't learn; they follow these settings exactly.",
+    long: "Nothing to set here for Long-Term Claude.",
+  },
 };
 
 const SECTION_BLURB: Partial<Record<SettingsSection, string>> = {
@@ -331,15 +355,25 @@ const SECTION_BLURB: Partial<Record<SettingsSection, string>> = {
   "What to trade": "Which stocks are in or out.",
   "How it decides": "How a stock gets picked and bought.",
   "In-play board":
-    "Free Choice box only. The Mac watches the whole market for stocks that are moving with unusual volume, finds a buy point and a stop for each, and wakes Claude on the best ones.",
+    "Claude day-trading boxes that pick their own stocks. The Mac watches the whole market for stocks that are moving with unusual volume, finds a buy point and a stop for each, and wakes Claude on the best ones.",
   Checks: "What each stock must pass before a buy. Tell Claude = Claude is told and decides; Stop the trade = the Mac refuses it.",
   Learning: "The review after each close, and the lessons Claude reads the next morning.",
   Exits: "How open trades are protected and sold.",
 };
 
+/** Long-Term Claude's sections read differently (no buying window, no flat-by). */
+const LONG_BLURB: Partial<Record<SettingsSection, string>> = {
+  "Money & risk": "How big each position is, how many it holds, and the emergency stop on every buy.",
+  "When to trade": "When Claude takes its one look each day, before the open.",
+  "What to trade": "Which stocks Claude looks at.",
+  "How it decides": "What a buy needs, and the Overkill indicator's inputs.",
+  Exits: "When a held stock is sold.",
+};
+
 export function BoxSettings({
   bookKey,
   claude,
+  long = false,
   defs,
   saved,
   budget,
@@ -351,6 +385,8 @@ export function BoxSettings({
 }: {
   bookKey: string;
   claude: boolean;
+  /** Long-Term Claude: its own table, no presets (they are day-trading values). */
+  long?: boolean;
   defs: LimitDef[];
   saved: Record<string, LimitValue>;
   /** The box's size now: kept on reset. */
@@ -363,6 +399,8 @@ export function BoxSettings({
   initialSection?: SettingsSection;
 }) {
   const { msg, busy, run, setMsg } = useAction();
+  const boxType: BoxType = long ? "long" : claude ? "claude" : "rules";
+  const blurb = (s: SettingsSection) => (long ? LONG_BLURB[s] : SECTION_BLURB[s]);
   const [vals, setVals] = useState<FormVals>(() => initVals(defs, saved));
   const [base, setBase] = useState<FormVals>(() => initVals(defs, saved));
   const [active, setActive] = useState<SettingsSection>(initialSection ?? "Money & risk");
@@ -438,31 +476,35 @@ export function BoxSettings({
       <div className="min-w-0 space-y-4">
         {/* presets + filter */}
         <div className="rounded-xl border border-border bg-surface2/40 p-3">
-          <div className="flex flex-wrap items-center gap-1.5">
-            <span className="mr-1 text-xs text-dim">Starting point</span>
-            {PRESETS.map((p) => (
-              <button
-                key={p.id}
-                type="button"
-                onClick={() => applyPreset(p.id)}
-                className={`rounded-full border px-2.5 py-1 text-xs transition ${preset === p.id ? "border-accent bg-accent/10 font-semibold text-accent" : "border-border bg-surface text-dim hover:text-text"}`}
-              >
-                {p.name}
-              </button>
-            ))}
-            <span
-              className={`rounded-full border px-2.5 py-1 text-xs ${preset === "custom" ? "border-accent bg-accent/10 font-semibold text-accent" : "border-dashed border-border text-faint"}`}
-              title="Your own mix of values"
-            >
-              Custom
-            </span>
-          </div>
-          <p className="mt-1.5 text-xs leading-snug text-dim">
-            {PRESETS.find((p) => p.id === preset)?.blurb ??
-              "Your own mix. Pick a starting point to fill the form; nothing is saved until Save."}{" "}
-            Presets never turn on short selling or borrowing, and never change the box size.
-          </p>
-          <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-border pt-2 text-xs">
+          {!long && (
+            <>
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="mr-1 text-xs text-dim">Starting point</span>
+                {PRESETS.map((p) => (
+                  <button
+                    key={p.id}
+                    type="button"
+                    onClick={() => applyPreset(p.id)}
+                    className={`rounded-full border px-2.5 py-1 text-xs transition ${preset === p.id ? "border-accent bg-accent/10 font-semibold text-accent" : "border-border bg-surface text-dim hover:text-text"}`}
+                  >
+                    {p.name}
+                  </button>
+                ))}
+                <span
+                  className={`rounded-full border px-2.5 py-1 text-xs ${preset === "custom" ? "border-accent bg-accent/10 font-semibold text-accent" : "border-dashed border-border text-faint"}`}
+                  title="Your own mix of values"
+                >
+                  Custom
+                </span>
+              </div>
+              <p className="mt-1.5 text-xs leading-snug text-dim">
+                {PRESETS.find((p) => p.id === preset)?.blurb ??
+                  "Your own mix. Pick a starting point to fill the form; nothing is saved until Save."}{" "}
+                Presets never turn on short selling or borrowing, and never change the box size.
+              </p>
+            </>
+          )}
+          <div className={`${long ? "" : "mt-2 border-t border-border pt-2"} flex flex-wrap items-center gap-x-4 gap-y-1 text-xs`}>
             <label className="flex cursor-pointer items-center gap-1.5 text-dim">
               <input type="checkbox" checked={onlyChanged} onChange={(e) => setOnlyChanged(e.target.checked)} className="accent-[var(--color-accent)]" />
               Show only changes
@@ -498,10 +540,10 @@ export function BoxSettings({
             active !== "Schedule & cost" && (
               <section>
                 <h3 className="font-display text-base font-semibold text-text">{active}</h3>
-                {SECTION_BLURB[active] && <p className="mb-3 mt-0.5 text-xs text-dim">{SECTION_BLURB[active]}</p>}
+                {blurb(active) && <p className="mb-3 mt-0.5 text-xs text-dim">{blurb(active)}</p>}
                 {bySection(active).length === 0 && !sectionExtras?.[active] ? (
                   <p className="rounded-lg bg-surface2/60 px-3 py-2 text-sm text-dim">
-                    {NOT_APPLICABLE[active]?.[claude ? "claude" : "rules"] ?? "Nothing to set here for this box."}
+                    {NOT_APPLICABLE[active]?.[boxType] ?? "Nothing to set here for this box."}
                   </p>
                 ) : (
                   <FieldList defs={bySection(active)} vals={vals} set={set} claude={claude} onlyChanged={false} extras={fieldExtras} />
@@ -525,7 +567,9 @@ export function BoxSettings({
             <Msg msg={msg} />
           </div>
           <p className="text-xs leading-snug text-faint">
-            {claude
+            {long
+              ? "The Mac copies these into this box before its daily Claude run, and its risk check refuses anything that breaks them."
+              : claude
               ? "The Mac copies these into this box before every Claude run, and its risk check refuses anything that breaks them."
               : "Used by the rules engine from its next run. Box size sets this box's starting cash."}
           </p>
@@ -583,7 +627,7 @@ export function UsageMeter({ runner, defs, weekCost }: { runner: Record<string, 
   );
 }
 
-/** How and when the Mac runs Claude (ai_runner.settings) — shared by both Claude boxes. */
+/** How and when the Mac runs Claude (ai_runner.settings) — shared by all Claude boxes. */
 export function RunnerSettings({ defs, saved, weekCost }: { defs: LimitDef[]; saved: Record<string, LimitValue>; weekCost: number }) {
   const { msg, busy, run } = useAction();
   const [vals, setVals] = useState<FormVals>(() => initVals(defs, saved));
@@ -639,7 +683,8 @@ export function ConnectCard({ connection }: { connection: { hint: string | null;
         )}
       </div>
       <p className="mt-1.5 text-xs leading-relaxed text-dim">
-        Used by the two Rules boxes (and for live prices here). Paper keys only — anything that isn&apos;t a PK… key on
+        The old shared account: used by the Rules boxes and the old Claude · Free box (and for live prices here). Day
+        Trader Claude and Long-Term Claude trade on their own paper accounts, whose keys stay on your Mac. Paper keys only — anything that isn&apos;t a PK… key on
         a PA… paper account is refused. Stored encrypted in the database under your account, never shown again.
       </p>
       {connection && !open && (

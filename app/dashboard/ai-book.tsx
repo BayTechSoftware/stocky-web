@@ -5,7 +5,8 @@ import { useRouter } from "next/navigation";
 import { closeRulesBox, loadRunDetail, removeNote, runAiTrader } from "../actions";
 import type { CloseOutLine, CloseOutResult } from "@/lib/aitrader/engine";
 import { money, moneySigned, pct, price as fprice, shares } from "@/lib/portfolio";
-import { CLAUDE_LIMITS, RUNNER_LIMITS, SCORECARD_GATE_LABEL, boxEnabled, defsForBook, effective, rulesDefs, type LimitValue } from "@/lib/aitrader/limits";
+import { CLAUDE_LIMITS, LONG_LIMITS, RUNNER_LIMITS, SCORECARD_GATE_LABEL, boxEnabled, defsForBook, effective, rulesDefs, type LimitValue } from "@/lib/aitrader/limits";
+import { isClaudeKey } from "@/lib/aitrader/boxes";
 import type { SettingsSection } from "@/lib/aitrader/layout";
 import { gateVerdict, marketLine, signedPct, type AiReviewShadow, type AiReviewTrade, type AiShadowItem } from "@/lib/aitrader/reviews";
 import type { AiBookView, AiNote, AiReplayDay, AiReview, AiRun, AiRunLite, ClosedTrade, ExitReason } from "@/lib/aitrader/view";
@@ -18,9 +19,40 @@ const BLURB: Record<AiBookView["key"], string> = {
   free: "Fixed rules, no AI. Buys daily chart setups across a hand-picked list of large US companies (minus your list), within your settings. Runs on the website on weekday schedules.",
   "claude-mylist":
     "Claude day-trades your watchlist: it scans, reads the news and times each buy and sell, within your settings. Runs on your Mac during market hours.",
-  "claude-free":
-    "Claude day-trades any US stock it picks. It reads the news and times each buy and sell, within your settings. Runs on your Mac during market hours.",
+  "claude-free": "Old shared account: no new trades; its last positions run out on their stops.",
+  "claude-day":
+    "Claude day-trades on its own paper account: any US stock it picks, or only your watchlist (your choice in Settings). Closes by your flat-by time.",
+  "claude-long":
+    "Claude holds stocks for weeks or months on its own paper account. Your Overkill indicator's ★ BUY / SELL signals and stop, plus the news and checks Claude already uses, drive its decisions. Runs once a day before the open.",
 };
+
+/** Long-Term Claude's limits at a glance (no day-trading meters: it runs once a day and holds for weeks). */
+function LongLimitsUsed({ b }: { b: AiBookView }) {
+  const cfg = effective(LONG_LIMITS, b.settings);
+  const maxPos = Number(cfg.max_positions);
+  const need = LONG_LIMITS.find((d) => d.key === "buy_needs_signal")?.optionLabels?.[String(cfg.buy_needs_signal)] ?? String(cfg.buy_needs_signal);
+  const todayCost = b.today.reduce((a, r) => a + (Number(r.usage?.cost_usd) || 0), 0);
+  const line = (label: string, value: string) => (
+    <div className="flex justify-between gap-3 text-[11px]">
+      <span className="text-dim">{label}</span>
+      <span className="text-right font-mono text-text tnum">{value}</span>
+    </div>
+  );
+  return (
+    <div className="grid gap-3 sm:grid-cols-2">
+      {maxPos > 0 ? (
+        <Meter label="Stocks held" used={b.positions.length} max={maxPos} fmt={(n) => String(n)} />
+      ) : (
+        line("Stocks held", `${b.positions.length} · no limit`)
+      )}
+      {line("Each new position", `${String(cfg.position_pct)}% of the box · ≈${money((b.equity * Number(cfg.position_pct)) / 100)}`)}
+      {line("Emergency stop", `${String(cfg.emergency_stop_pct)}% under the entry`)}
+      {line("Daily look (NY)", String(cfg.run_at))}
+      {line("A buy needs", need)}
+      {line("Claude usage", `$${todayCost.toFixed(2)} today · $${b.weekCostUsd.toFixed(2)} week`)}
+    </div>
+  );
+}
 
 export { col };
 
@@ -44,7 +76,8 @@ function Meter({ label, used, max, fmt }: { label: string; used: number | null; 
 }
 
 function LimitsUsed({ b }: { b: AiBookView }) {
-  const isClaude = b.key.startsWith("claude-");
+  const isClaude = isClaudeKey(b.key);
+  if (b.key === "claude-long") return <LongLimitsUsed b={b} />;
   if (isClaude) {
     const cfg = { ...effective(CLAUDE_LIMITS, b.settings), ...(b.lastRun?.summary?.limits?.config ?? {}) };
     const used = b.lastRun?.summary?.limits?.used;
@@ -1031,12 +1064,13 @@ export function BookCard({
 }: {
   b: AiBookView;
   runner: Record<string, LimitValue>;
-  /** This week's Claude usage, both Claude boxes together. */
+  /** This week's Claude usage, the visible Claude boxes together. */
   weekCost: number;
   initialSection?: Section;
   initialGroup?: SettingsSection;
 }) {
-  const isClaude = b.key.startsWith("claude-");
+  const isClaude = isClaudeKey(b.key);
+  const isLong = b.key === "claude-long";
   const off = !boxEnabled(b.settings);
   const run = b.lastRun;
   const defs = defsForBook(b.key);
@@ -1051,7 +1085,8 @@ export function BookCard({
   const todayPnl = closedToday.reduce((a, t) => a + (t.pnl ?? 0), 0);
   const openPnl = b.positions.reduce((a, p) => a + (p.pnl ?? 0), 0);
   const entriesWaiting = b.pending.filter((o) => o.kind === "entry").length;
-  const next = isClaude ? nextCheck(run?.ran_at, runner, now) : null;
+  // Long-Term Claude looks once a day at its own time, not on the runner's interval.
+  const next = isLong ? `${String(effective(LONG_LIMITS, b.settings).run_at)} NY` : isClaude ? nextCheck(run?.ran_at, runner, now) : null;
 
   const status = [
     b.positions.length ? `Holding ${b.positions.length} stock${b.positions.length === 1 ? "" : "s"}` : "Nothing open",
@@ -1088,7 +1123,7 @@ export function BookCard({
         <div className="border-b border-border p-5 md:p-6">
           <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
             <h3 className="font-display text-sm font-semibold text-text">What Claude is doing now</h3>
-            {next && <span className="text-[11px] text-faint">next check about {next}</span>}
+            {next && <span className="text-[11px] text-faint">{isLong ? `looks daily at ${next}` : `next check about ${next}`}</span>}
           </div>
           <div className="rounded-xl border border-border bg-surface2/40 p-4">
             <ClaudePlan run={run} />
@@ -1278,7 +1313,9 @@ export function BookCard({
                 </Empty>
               )}
             </Block>
-            {isClaude && <DailyReviews reviews={b.reviews} notes={b.notes} onLessons={() => openSettings("Learning")} />}
+            {isClaude && (!isLong || b.reviews.length > 0) && (
+              <DailyReviews reviews={b.reviews} notes={b.notes} onLessons={() => openSettings("Learning")} />
+            )}
           </>
         )}
 
@@ -1294,16 +1331,26 @@ export function BookCard({
             key={b.key}
             bookKey={b.key}
             claude={isClaude}
+            long={isLong}
             defs={defs}
             saved={saved}
             budget={budget}
             initialSection={group}
             fieldExtras={fieldExtras}
-            sectionExtras={isClaude ? { Learning: <ReadsNext notes={b.notes} use={lessons.use} count={lessons.count} /> } : undefined}
-            scheduleBadge={isClaude ? "shared by both Claude boxes" : undefined}
+            sectionExtras={isClaude && !isLong ? { Learning: <ReadsNext notes={b.notes} use={lessons.use} count={lessons.count} /> } : undefined}
+            scheduleBadge={isClaude ? "shared by all Claude boxes" : undefined}
             schedule={(current) =>
               isClaude ? (
-                <RunnerSettings defs={RUNNER_LIMITS} saved={runner} weekCost={weekCost} />
+                <div className="space-y-3">
+                  {isLong && (
+                    <p className="rounded-lg bg-surface2/60 px-3 py-2 text-xs leading-snug text-dim">
+                      Long-Term Claude looks once a day at its own time (Settings → When to trade). The model and the weekly
+                      usage cap below apply to all Claude boxes; the check interval and news wake-ups are for the day-trading
+                      boxes.
+                    </p>
+                  )}
+                  <RunnerSettings defs={RUNNER_LIMITS} saved={runner} weekCost={weekCost} />
+                </div>
               ) : (
                 <div className="space-y-3">
                   <RulesRunButtons />
@@ -1330,7 +1377,7 @@ function Stat({ label, value, sub, tone }: { label: string; value: string; sub?:
 
 /** One box as a compact tile for the Overview tab. Clicking it opens the box's own tab. */
 export function BookTile({ b, onOpen }: { b: AiBookView; onOpen: () => void }) {
-  const isClaude = b.key.startsWith("claude-");
+  const isClaude = isClaudeKey(b.key);
   const decided = b.wins + b.losses;
   const todayPnl = b.todayTrades.reduce((a, t) => a + (t.pnl ?? 0), 0);
   const hasToday = b.todayTrades.some((t) => t.pnl != null);

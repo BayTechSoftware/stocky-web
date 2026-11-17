@@ -6,7 +6,7 @@ vi.mock("@/lib/alpaca", () => alpacaModule(() => alp));
 const { runAiTrader } = await import("./engine");
 
 const U = "user-1";
-const BOOK = { id: "book-free", user_id: U, key: "free", name: "Free Choice", start_cash: 5000, created_at: "2026-10-01T00:00:00Z", settings: { max_new_per_run: 0 } };
+const BOOK = { id: "book-free", user_id: U, key: "free", name: "Free Choice", hidden: false, start_cash: 5000, created_at: "2026-10-01T00:00:00Z", settings: { max_new_per_run: 0 } };
 
 function world(): FakeDb {
   return fakeDb({ ai_books: [{ ...BOOK }], ai_orders: [], ai_fills: [], watchlist: [], symbol_signals: [], ai_equity: [], ai_runs: [] });
@@ -95,7 +95,7 @@ describe("engine harness: failed exit keeps a stop (fix #5)", () => {
   });
 });
 
-const MYLIST = { id: "book-my", user_id: U, key: "mylist", name: "My List", start_cash: 5000, created_at: "2026-10-01T00:00:00Z", settings: {} };
+const MYLIST = { id: "book-my", user_id: U, key: "mylist", name: "My List", hidden: false, start_cash: 5000, created_at: "2026-10-01T00:00:00Z", settings: {} };
 /** A My List book with one fresh BUY signal on AAPL (and bars), so a run wants to enter it. */
 function entryWorld(settings: Record<string, unknown> = {}): FakeDb {
   alp.bars.AAPL = dailyBars(80, 100);

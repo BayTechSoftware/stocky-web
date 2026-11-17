@@ -14,6 +14,7 @@ import { loadCreds, type ReplayInfo, type RunSummary, type RunUsage } from "./en
 import { groupReplays, type AiReplayDay } from "./replays";
 import { loadFills, loadOrders } from "./rows";
 import { loadAdjustments, sizeOf, type CashAdjustment } from "./cash";
+import { isClaudeKey, sortBooks, type AiBookKey } from "./boxes";
 
 export type { AiReplayDay, AiReplayStep } from "./replays";
 export type { ClosedTrade, ExitReason } from "./ledger";
@@ -51,11 +52,13 @@ export interface AiOrderView {
   created_at: string;
 }
 
-export type AiBookKey = "mylist" | "free" | "claude-mylist" | "claude-free";
+export type { AiBookKey } from "./boxes";
 
 export interface AiBookView {
   key: AiBookKey;
   name: string;
+  /** ai_books.hidden: left out of the tab bar, totals and comparisons; its data still loads. */
+  hidden: boolean;
   startCash: number;
   cash: number;
   equity: number;
@@ -155,13 +158,18 @@ export async function loadAiView(
   supabase: SupabaseClient,
   opts?: { admin: Admin; userId: string }
 ): Promise<AiView | null> {
-  const { data: books } = await supabase
+  const withHidden = await supabase
     .from("ai_books")
-    .select("id, key, name, start_cash, settings")
+    .select("id, key, name, start_cash, settings, hidden")
     .order("key", { ascending: true });
+  // Before supabase/day_long.sql adds ai_books.hidden that select fails: read without it (nothing hidden)
+  // rather than lose the AI tab.
+  const books: Record<string, unknown>[] | null = withHidden.error
+    ? (await supabase.from("ai_books").select("id, key, name, start_cash, settings").order("key", { ascending: true })).data
+    : withHidden.data;
   if (!books?.length) return null;
   const ids = books.map((b) => b.id as string);
-  const claudeIds = books.filter((b) => String(b.key).startsWith("claude-")).map((b) => b.id as string);
+  const claudeIds = books.filter((b) => isClaudeKey(String(b.key))).map((b) => b.id as string);
 
   // The whole ledger, paged (lib/aitrader/rows.ts): fills and every order (open orders, each position's
   // entry and short roles all come from this one list, so nothing is cut off at the newest 200).
@@ -315,7 +323,7 @@ export async function loadAiView(
 
   const views: AiBookView[] = books.map((b) => {
     // P&L baseline: start_cash + size changes (Rules and Claude boxes alike).
-    const start = sizeOf({ id: b.id as string, key: b.key as string, start_cash: b.start_cash as number, settings: b.settings }, adj);
+    const start = sizeOf({ id: b.id as string, key: b.key as string, start_cash: b.start_cash as number, settings: b.settings as Record<string, unknown> | null }, adj);
     const st = bookState(
       start,
       ledgerFills(fills.filter((f) => f.book_id === b.id), shortEntries),
@@ -412,6 +420,7 @@ export async function loadAiView(
     return {
       key: b.key as AiBookKey,
       name: b.name as string,
+      hidden: b.hidden === true,
       startCash: start,
       // Free cash, as the Mac sizes from it: a short's proceeds aren't spendable and its notional is collateral.
       cash: st.cash - 2 * positions.reduce((a, p) => a + (p.qty < 0 ? -p.qty * p.avgCost : 0), 0),
@@ -455,12 +464,9 @@ export async function loadAiView(
     };
   });
 
-  // Side by side: each rules book next to its Claude twin.
-  const ORDER: AiBookKey[] = ["mylist", "claude-mylist", "free", "claude-free"];
-  views.sort((a, b) => ORDER.indexOf(a.key) - ORDER.indexOf(b.key));
   const conn = connR.data as { account_hint: string | null; connected_at: string } | null;
   return {
-    books: views,
+    books: sortBooks(views),
     accountEquity,
     marketOpen,
     prices: px.size ? "live" : "mac",
