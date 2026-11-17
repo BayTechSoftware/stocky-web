@@ -11,7 +11,7 @@ import {
   validateNewPassword,
 } from "@/lib/authlink";
 
-type Phase = { s: "loading" } | { s: "error"; message: string } | { s: "ready" };
+type Phase = { s: "loading" } | { s: "error"; message: string } | { s: "ready"; email: string | null };
 
 /**
  * Landing page for Supabase invite + password-recovery links (redirect_to = /set-password).
@@ -47,6 +47,7 @@ export default function SetPasswordPage() {
 
     const supabase = createPageClient();
     clientRef.current = supabase;
+    const who = async () => (await supabase.auth.getUser()).data.user?.email ?? null;
 
     (async () => {
       if (cb.kind === "error") {
@@ -58,7 +59,7 @@ export default function SetPasswordPage() {
           access_token: cb.accessToken,
           refresh_token: cb.refreshToken,
         });
-        setPhase(error ? { s: "error", message: linkError(error.message) } : { s: "ready" });
+        setPhase(error ? { s: "error", message: linkError(error.message) } : { s: "ready", email: await who() });
         return;
       }
       if (cb.kind === "code") {
@@ -66,14 +67,14 @@ export default function SetPasswordPage() {
           cb.code,
           cb.flowId ? { flowId: cb.flowId } : undefined
         );
-        setPhase(error ? { s: "error", message: linkError(error.message) } : { s: "ready" });
+        setPhase(error ? { s: "error", message: linkError(error.message) } : { s: "ready", email: await who() });
         return;
       }
       // No link params: fine if already signed in (e.g. page reload after the link was consumed).
       const { data } = await supabase.auth.getUser();
       setPhase(
         data.user
-          ? { s: "ready" }
+          ? { s: "ready", email: data.user.email ?? null }
           : { s: "error", message: "Open this page from the link in your invite or reset e-mail." }
       );
     })();
@@ -117,6 +118,11 @@ export default function SetPasswordPage() {
           </>
         )}
 
+        {phase.s === "ready" && phase.email && (
+          <p className="mt-4 text-sm text-zinc-700">
+            Setting the password for <span className="font-medium">{phase.email}</span>. Not you? Close this page.
+          </p>
+        )}
         {phase.s === "ready" && (
           <>
             <form onSubmit={onSubmit} className="mt-6 space-y-3">

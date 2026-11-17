@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   EXPIRED_LINK_MESSAGE,
+  GENERIC_LINK_MESSAGE,
   parseAuthCallback,
   stripAuthParams,
   validateNewPassword,
@@ -41,11 +42,19 @@ describe("parseAuthCallback", () => {
     ).toEqual({ kind: "error", message: EXPIRED_LINK_MESSAGE });
   });
 
-  it("detects errors in the query too, and passes other messages through", () => {
-    expect(parseAuthCallback(`${base}?error=server_error&error_description=Something+broke`)).toEqual({
+  it("detects errors in the query too, and never shows text from the URL", () => {
+    expect(parseAuthCallback(`${base}?error=server_error&error_description=Call+this+number`)).toEqual({
       kind: "error",
-      message: "Something broke",
+      message: GENERIC_LINK_MESSAGE,
     });
+  });
+
+  it("accepts only invite and recovery sessions", () => {
+    expect(parseAuthCallback(`${base}#access_token=A&refresh_token=R&type=magiclink`)).toEqual({
+      kind: "error",
+      message: GENERIC_LINK_MESSAGE,
+    });
+    expect(parseAuthCallback(`${base}#access_token=A&refresh_token=R`)).toMatchObject({ kind: "error" });
   });
 
   it("errors win over tokens", () => {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 
@@ -11,6 +11,15 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [msg, setMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  // An invite / reset link that Supabase sent to the site root ends here (/ -> /dashboard -> /login keep the
+  // #fragment): pass it on to the page that sets the password.
+  useEffect(() => {
+    const h = window.location.hash;
+    if (/[#&]type=(invite|recovery)(&|$)/.test(h) || /[#&]error_code=/.test(h)) {
+      window.location.replace("/set-password" + h);
+    }
+  }, []);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();

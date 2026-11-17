@@ -15,7 +15,10 @@ export type AuthCallback =
   | { kind: "none" };
 
 export const EXPIRED_LINK_MESSAGE = "This link has expired; ask the owner for a new invite.";
+export const GENERIC_LINK_MESSAGE = "This link could not be used; ask the owner for a new invite.";
 export const MIN_PASSWORD_LENGTH = 8;
+/** Only these links may sign someone in here (an invite or a password reset), never any other session. */
+export const LINK_TYPES = ["invite", "recovery"];
 
 export function parseAuthCallback(href: string): AuthCallback {
   let url: URL;
@@ -36,13 +39,15 @@ export function parseAuthCallback(href: string): AuthCallback {
     if (errCode === "otp_expired" || text.includes("expired") || text.includes("invalid")) {
       return { kind: "error", message: EXPIRED_LINK_MESSAGE };
     }
-    return { kind: "error", message: errDesc ?? err ?? "This link could not be used." };
+    return { kind: "error", message: GENERIC_LINK_MESSAGE }; // never show text taken from the URL
   }
 
   const accessToken = hash.get("access_token");
   const refreshToken = hash.get("refresh_token");
   if (accessToken && refreshToken) {
-    return { kind: "tokens", accessToken, refreshToken, type: hash.get("type") };
+    const type = hash.get("type");
+    if (!type || !LINK_TYPES.includes(type)) return { kind: "error", message: GENERIC_LINK_MESSAGE };
+    return { kind: "tokens", accessToken, refreshToken, type };
   }
 
   const code = query.get("code");
