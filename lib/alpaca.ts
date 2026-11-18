@@ -189,7 +189,7 @@ export interface FillActivity {
   id: string;
   order_id: string;
   symbol: string;
-  side: "buy" | "sell";
+  side: "buy" | "sell" | "sell_short"; // Alpaca reports a short sale's fill as "sell_short"
   qty: string;
   price: string;
   transaction_time: string;

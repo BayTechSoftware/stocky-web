@@ -154,7 +154,7 @@ export function planLiveSync(
       book_id: bookOf.get(f.order_id)!,
       order_id: f.order_id,
       symbol: f.symbol,
-      side: f.side,
+      side: f.side === "sell_short" ? "sell" : f.side, // ai_fills (and the Mac ledger) know only buy/sell
       qty: Number(f.qty),
       price: Number(f.price),
       transacted_at: f.transaction_time,

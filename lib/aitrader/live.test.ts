@@ -77,6 +77,11 @@ describe("planLiveSync", () => {
     expect(planLiveSync([same], [r], [], books).updates).toEqual([]);
   });
 
+  it("records a short sale's fill (Alpaca: sell_short) as a sell, which ai_fills accepts", () => {
+    const p = planLiveSync([], [order({})], [{ ...fill("l2"), side: "sell_short" }], books);
+    expect(p.fillRows).toEqual([expect.objectContaining({ order_id: "l2", side: "sell" })]);
+  });
+
   it("ignores another account's orders and their fills", () => {
     const p = planLiveSync([], [order({ id: "x", client_order_id: "mine-by-hand" })], [fill("x")], books);
     expect(p.inserts).toHaveLength(0);
