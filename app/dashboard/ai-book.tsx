@@ -6,13 +6,14 @@ import { closeRulesBox, loadRunDetail, removeNote, runAiTrader } from "../action
 import type { CloseOutLine, CloseOutResult } from "@/lib/aitrader/engine";
 import { money, moneySigned, pct, price as fprice, shares } from "@/lib/portfolio";
 import { CLAUDE_LIMITS, LONG_LIMITS, RUNNER_LIMITS, SCORECARD_GATE_LABEL, boxEnabled, defsForBook, effective, rulesDefs, type LimitValue } from "@/lib/aitrader/limits";
-import { isClaudeKey } from "@/lib/aitrader/boxes";
+import { OWN_ACCOUNT_KEYS, isClaudeKey } from "@/lib/aitrader/boxes";
 import type { SettingsSection } from "@/lib/aitrader/layout";
 import { gateVerdict, marketLine, signedPct, type AiReviewShadow, type AiReviewTrade, type AiShadowItem } from "@/lib/aitrader/reviews";
 import type { AiBookView, AiNote, AiReplayDay, AiReview, AiRun, AiRunLite, ClosedTrade, ExitReason } from "@/lib/aitrader/view";
 import { ClaudePlan, LABEL, RunDetail, col, phaseName, when } from "./ai-run";
 import { BacktestPanel } from "./ai-backtest";
 import { BoxSettings, OffBadge, RunnerSettings } from "./ai-settings";
+import { HowItWorksLive } from "./ai-flow";
 
 const BLURB: Record<AiBookView["key"], string> = {
   mylist: "Fixed rules, no AI. Trades your watchlist on Stocky's signals, within your settings. Runs on the website on weekday schedules.",
@@ -1061,6 +1062,7 @@ export function BookCard({
   weekCost,
   initialSection,
   initialGroup,
+  marketOpen = null,
 }: {
   b: AiBookView;
   runner: Record<string, LimitValue>;
@@ -1068,6 +1070,8 @@ export function BookCard({
   weekCost: number;
   initialSection?: Section;
   initialGroup?: SettingsSection;
+  /** Market open now (Alpaca clock; null = unknown): how often the live flow chart re-reads. */
+  marketOpen?: boolean | null;
 }) {
   const isClaude = isClaudeKey(b.key);
   const isLong = b.key === "claude-long";
@@ -1128,6 +1132,11 @@ export function BookCard({
           <div className="rounded-xl border border-border bg-surface2/40 p-4">
             <ClaudePlan run={run} />
           </div>
+          {OWN_ACCOUNT_KEYS.includes(b.key) && (
+            <div className="mt-4">
+              <HowItWorksLive bookKey={b.key} marketOpen={marketOpen} />
+            </div>
+          )}
         </div>
       )}
 

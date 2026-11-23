@@ -8,7 +8,8 @@ import type { ConfirmedItem } from "@/lib/aitrader/closeout";
 import { RUNNER_LIMITS, defsForBook, effective, overridesOnly, validateLimits } from "@/lib/aitrader/limits";
 import type { AiRun } from "@/lib/aitrader/view";
 import { planLiveSync, syncWindow, type KnownOrder } from "@/lib/aitrader/live";
-import { onSharedAccount } from "@/lib/aitrader/boxes";
+import { OWN_ACCOUNT_KEYS, onSharedAccount } from "@/lib/aitrader/boxes";
+import { SYMBOL_SPAN_DAYS, addDays, inRecent, nyDate, nyDayBounds, toEvents, type AiFlowData } from "@/lib/aitrader/flow";
 import { loadOrders, must } from "@/lib/aitrader/rows";
 import { baselineOf, loadAdjustments, sizeOf } from "@/lib/aitrader/cash";
 import { AlpacaError, getClock, getDailyBars, getPaperAccount, listFills, listOrders, type Bar, type Creds } from "@/lib/alpaca";
@@ -624,6 +625,100 @@ export async function loadRunDetail(runId: string): Promise<{ run: AiRun } | { e
   if (error) return { error: error.message };
   if (!data) return { error: "run not found" };
   return { run: data as AiRun };
+}
+
+/* ---------------- AI Trader: "How it works — live" (ai_events) ---------------- */
+
+/** Steps feeding the chart's nodes (minute checks are counted, not listed). */
+const FLOW_NODE_CAP = 2000;
+const FLOW_FEED_MAX = 1000;
+
+/**
+ * One Claude box's recorded steps (ai_events, written by the Mac) for a New York day, or one stock's
+ * steps over the last week. RLS: only the user's own books' events.
+ */
+export async function loadAiFlow(req: {
+  bookKey: string;
+  /** YYYY-MM-DD (New York); null = today. */
+  day: string | null;
+  symbol: string | null;
+  /** How many feed rows (newest first). */
+  limit: number;
+  /** Include the every-minute checks in the feed. */
+  withWatch: boolean;
+}): Promise<AiFlowData | { error: string }> {
+  const { supabase, user } = await uid();
+  if (!user) return { error: "not signed in" };
+  if (!OWN_ACCOUNT_KEYS.includes(req.bookKey)) return { error: "unknown box" };
+  const today = nyDate();
+  const day = req.day ?? today;
+  if (!inRecent(day, today)) return { error: "pick a day from the last week" };
+  const symbol = req.symbol ? cleanSymbol(req.symbol) || null : null;
+  const limit = Math.min(Math.max(Math.floor(Number(req.limit) || 200), 1), FLOW_FEED_MAX);
+
+  const { data: book, error: bookErr } = await supabase
+    .from("ai_books")
+    .select("id")
+    .eq("user_id", user.id)
+    .eq("key", req.bookKey)
+    .maybeSingle();
+  if (bookErr) return { error: bookErr.message };
+  if (!book) return { error: "box not found" };
+  const bookId = book.id as string;
+  const { start, end } = nyDayBounds(day);
+  const cols = "id, at, step, symbol, title, ok, run_ref, detail";
+
+  if (symbol) {
+    // A stock's path: its steps from a week before this day to the end of it.
+    const since = nyDayBounds(addDays(day, -(SYMBOL_SPAN_DAYS - 1))).start;
+    const { data, error } = await supabase
+      .from("ai_events")
+      .select(cols)
+      .eq("book_id", bookId)
+      .eq("symbol", symbol)
+      .gte("at", since)
+      .lt("at", end)
+      .order("at", { ascending: false })
+      .order("id", { ascending: false })
+      .limit(FLOW_NODE_CAP + 1);
+    if (error) return { error: error.message };
+    const events = toEvents(data);
+    const truncated = events.length > FLOW_NODE_CAP;
+    const nodes = events.slice(0, FLOW_NODE_CAP);
+    return { day, today, symbol, since, nodes, watch: null, feed: nodes.slice(0, limit), feedMore: nodes.length > limit, truncated, at: new Date().toISOString() };
+  }
+
+  const inDay = () => supabase.from("ai_events").select(cols).eq("book_id", bookId).gte("at", start).lt("at", end);
+  const watchCount = (failedOnly: boolean) => {
+    let q = supabase.from("ai_events").select("id", { count: "exact", head: true }).eq("book_id", bookId).eq("step", "watch").gte("at", start).lt("at", end);
+    if (failedOnly) q = q.eq("ok", false);
+    return q;
+  };
+  let feedQ = inDay();
+  if (!req.withWatch) feedQ = feedQ.neq("step", "watch");
+  const [nodesR, feedR, watchN, watchFailN, watchLatestR] = await Promise.all([
+    inDay().neq("step", "watch").order("at", { ascending: false }).order("id", { ascending: false }).limit(FLOW_NODE_CAP + 1),
+    feedQ.order("at", { ascending: false }).order("id", { ascending: false }).limit(limit + 1),
+    watchCount(false),
+    watchCount(true),
+    inDay().eq("step", "watch").order("at", { ascending: false }).order("id", { ascending: false }).limit(1),
+  ]);
+  const err = nodesR.error ?? feedR.error ?? watchN.error ?? watchFailN.error ?? watchLatestR.error;
+  if (err) return { error: err.message };
+  const nodes = toEvents(nodesR.data);
+  const feed = toEvents(feedR.data);
+  return {
+    day,
+    today,
+    symbol: null,
+    since: start,
+    nodes: nodes.slice(0, FLOW_NODE_CAP),
+    watch: { count: watchN.count ?? 0, failed: watchFailN.count ?? 0, latest: toEvents(watchLatestR.data)[0] ?? null },
+    feed: feed.slice(0, limit),
+    feedMore: feed.length > limit,
+    truncated: nodes.length > FLOW_NODE_CAP,
+    at: new Date().toISOString(),
+  };
 }
 
 

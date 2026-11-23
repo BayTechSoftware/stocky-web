@@ -170,6 +170,7 @@ export default function AiTrader({ ai }: { ai: AiView | null }) {
           weekCost={weekCost}
           initialSection={open.section}
           initialGroup={open.group}
+          marketOpen={ai.marketOpen}
         />
       ) : (
         <>
