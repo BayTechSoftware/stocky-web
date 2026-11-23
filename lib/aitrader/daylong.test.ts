@@ -56,6 +56,7 @@ describe("LONG_LIMITS", () => {
       enabled: true, budget: 10000, position_pct: 10, max_positions: 0, emergency_stop_pct: 25, allow_short: false,
       long_universe: "watchlist_large", universe_add: "", universe_remove: "", run_at: "09:00", buy_needs_signal: "off",
       stop_break_sells: true,
+      intraday_watch: true, scan_min: 15, move_pct: 4, news_wakes: true, idle_cash_pct: 20, idle_review_min: 120, wake_gap_min: 20,
       ok_wt_ch_len: 9, ok_wt_avg_len: 12, ok_wt_ma_len: 3, ok_lv_lower: -45, ok_lv_ob: 53, ok_lv_os: -53, ok_stoch_hit: 95,
       ok_monthly_any: true, ok_higher_only: true, ok_confirm_only: false, ok_st_len: 14, ok_st_rsi: 14, ok_st_k: 3, ok_st_log: true,
       ok_rsi_len: 14, ok_div_ob: 45, ok_div_os: -65, ok_div_ob2: 15, ok_div_os2: -40, ok_mean_years: 4, ok_fib_len: 260,
