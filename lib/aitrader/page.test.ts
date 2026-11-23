@@ -294,3 +294,15 @@ describe("marketLine", () => {
     expect(marketLine(null, now)).toBeNull();
   });
 });
+
+describe("basic settings", () => {
+  it("every basic key exists in its box's table, in order", async () => {
+    const { BASIC_KEYS, basicDefs } = await import("./layout");
+    const { defsForBook } = await import("./limits");
+    for (const key of ["claude-day", "claude-long"]) {
+      const defs = basicDefs(key, defsForBook(key));
+      expect(defs.map((d) => d.key)).toEqual(BASIC_KEYS[key]);
+    }
+    expect(basicDefs("mylist", defsForBook("mylist"))).toEqual([]);
+  });
+});

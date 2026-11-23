@@ -8,7 +8,7 @@ import type { AiBookView, AiView } from "@/lib/aitrader/view";
 import { OWN_ACCOUNT_KEYS, hiddenBooks, isClaudeKey, showSharedAccount, totalsOf, visibleBooks } from "@/lib/aitrader/boxes";
 import { nyDate } from "@/lib/aitrader/flow";
 import { marketLine, runSentence, shortDate, sinceYesterday, todayStats, tooEarly } from "@/lib/aitrader/page";
-import { BoxSettingsPanel } from "./ai-book";
+import { BLURB, BoxSettingsPanel } from "./ai-book";
 import { Badge, BoxPage, LinkButton, PaperBadge, arrow, toneText } from "./ai-box";
 import { CompareChart, CompareStrip, firstDayOf, sinceFor, useCompare, useSpyDaily } from "./ai-compare";
 import { ConnectCard, UsageMeter } from "./ai-settings";
@@ -86,7 +86,7 @@ function BoxRow({ b, onOpen }: { b: AiBookView; onOpen: () => void }) {
         </span>
         <span className="text-[13px] text-dim">{isClaudeKey(b.key) ? "Claude" : "fixed rules"}</span>
         <span className="ml-auto text-[15px] font-semibold text-text tnum">{money(b.equity, 0)}</span>
-        <span className={`w-28 text-right text-[14px] tnum ${toneText(b.pnl)}`}>
+        <span className={`text-right text-[14px] tnum sm:w-28 ${toneText(b.pnl)}`}>
           {arrow(b.pnl)}
           {pct(b.pnlPct, 1)}
         </span>
@@ -157,7 +157,29 @@ export default function AiTrader({ ai }: { ai: AiView | null }) {
             ← Back to {current.name}
           </LinkButton>
         </nav>
-        <h1 className="font-display text-[24px] font-bold tracking-[-0.01em] text-text md:text-[30px]">Settings · {current.name}</h1>
+        <header className="flex flex-col gap-2">
+          <div className="flex flex-wrap items-center gap-x-3.5 gap-y-2">
+            <h1 className="font-display text-[24px] font-bold tracking-[-0.01em] text-text md:text-[30px]">Settings · {current.name}</h1>
+            <PaperBadge />
+          </div>
+          <p className="max-w-prose text-[15px] leading-snug text-sub">{BLURB[current.key]}</p>
+          {books.length > 1 && (
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[14px]">
+              <span className="text-dim">Settings for</span>
+              {books.map((x) =>
+                x.key === current.key ? (
+                  <span key={x.key} className="min-h-11 content-center font-semibold text-text">
+                    {x.name}
+                  </span>
+                ) : (
+                  <LinkButton key={x.key} onClick={() => pick(x.key, "settings")} className="min-h-11">
+                    {x.name}
+                  </LinkButton>
+                )
+              )}
+            </div>
+          )}
+        </header>
         <div className="ai-card">
           <BoxSettingsPanel key={`${current.key}-${open.n}`} b={current} runner={ai.runner} weekCost={weekCost} initialGroup={open.group} />
         </div>

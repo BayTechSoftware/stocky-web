@@ -1003,6 +1003,23 @@ export function BoxSettingsPanel({
       fieldExtras={fieldExtras}
       sectionExtras={isClaude && !isLong ? { Learning: <ReadsNext notes={b.notes} use={lessons.use} count={lessons.count} /> } : undefined}
       scheduleBadge={isClaude ? "shared by all Claude boxes" : undefined}
+      basicExtra={
+        b.key === "claude-day"
+          ? (go) => {
+              const r = effective(RUNNER_LIMITS, runner);
+              const cap = Number(r.weekly_cap_usd) || 0;
+              return (
+                <p className="rounded-lg bg-surface2/60 px-3 py-2 text-[13px] leading-snug text-sub">
+                  Claude checks every {Number(r.interval_min) || 15} min in market hours ·{" "}
+                  {cap ? `weekly usage cap $${cap.toFixed(0)}` : "no weekly usage cap"} (shared by all Claude boxes).{" "}
+                  <button type="button" onClick={() => go("Schedule & cost")} className="font-medium text-link hover:underline">
+                    Change how often and the cap →
+                  </button>
+                </p>
+              );
+            }
+          : undefined
+      }
       schedule={(current) =>
         isClaude ? (
           <div className="space-y-3">

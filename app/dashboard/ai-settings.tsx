@@ -4,7 +4,7 @@ import { useState, useTransition, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { connectAlpaca, disconnectAlpaca, resetBookLimits, saveBookLimits, saveRunnerSettings } from "../actions";
 import { effective, parseSymbols, type LimitDef, type LimitValue } from "@/lib/aitrader/limits";
-import { SECTIONS, isAdvanced, isIndicator, isShown, isWeight, sectionOf, sortDefs, type SettingsSection } from "@/lib/aitrader/layout";
+import { SECTIONS, basicDefs, isAdvanced, isIndicator, isShown, isWeight, sectionOf, sortDefs, type SettingsSection } from "@/lib/aitrader/layout";
 import { PRESETS, matchPreset, presetValues, type PresetId } from "@/lib/aitrader/presets";
 import { LABEL } from "./ai-run";
 
@@ -382,6 +382,7 @@ export function BoxSettings({
   schedule,
   scheduleBadge,
   initialSection,
+  basicExtra,
 }: {
   bookKey: string;
   claude: boolean;
@@ -397,22 +398,28 @@ export function BoxSettings({
   schedule: (current: () => FormVals) => ReactNode;
   scheduleBadge?: string;
   initialSection?: SettingsSection;
+  /** Shown under the basic settings (e.g. the shared check interval, with a way to change it). Gets "open a section". */
+  basicExtra?: (go: (s: SettingsSection) => void) => ReactNode;
 }) {
   const { msg, busy, run, setMsg } = useAction();
   const boxType: BoxType = long ? "long" : claude ? "claude" : "rules";
   const blurb = (s: SettingsSection) => (long ? LONG_BLURB[s] : SECTION_BLURB[s]);
   const [vals, setVals] = useState<FormVals>(() => initVals(defs, saved));
   const [base, setBase] = useState<FormVals>(() => initVals(defs, saved));
-  const [active, setActive] = useState<SettingsSection>(initialSection ?? "Money & risk");
+  // The box's few basic settings come first, on a page of their own; every other field stays in its section.
+  const basics = basicDefs(bookKey, defs);
+  const basicKeys = new Set(basics.map((d) => d.key));
+  const [active, setActive] = useState<SettingsSection | "Basics">(initialSection ?? (basics.length ? "Basics" : "Money & risk"));
   const [onlyChanged, setOnlyChanged] = useState(false);
   const set = (key: string, v: string) => setVals((p) => ({ ...p, [key]: v }));
 
   const sorted = sortDefs(defs);
-  const bySection = (s: SettingsSection) => sorted.filter((d) => sectionOf(d) === s);
+  const bySection = (s: SettingsSection | "Basics") =>
+    s === "Basics" ? basics : sorted.filter((d) => sectionOf(d) === s && !basicKeys.has(d.key));
   // Only fields that are shown count as changes (a hidden child keeps its value but can't be seen or reverted).
   const isChanged = (d: LimitDef) => isShown(d, vals) && !isDefault(d, vals[d.key]);
   const changed = defs.filter(isChanged);
-  const changedIn = (s: SettingsSection) => bySection(s).filter(isChanged).length;
+  const changedIn = (s: SettingsSection | "Basics") => bySection(s).filter(isChanged).length;
   const unsaved = defs.some((d) => (vals[d.key] ?? "") !== (base[d.key] ?? ""));
   const preset = matchPreset(defs, claude, (d, v) => {
     const s0 = vals[d.key];
@@ -447,7 +454,7 @@ export function BoxSettings({
   }
 
   const showSchedule = active === "Schedule & cost" && !onlyChanged;
-  const chip = (s: SettingsSection) => {
+  const chip = (s: SettingsSection | "Basics") => {
     const on = active === s && !onlyChanged;
     const n = s === "Schedule & cost" ? 0 : changedIn(s);
     return (
@@ -461,7 +468,7 @@ export function BoxSettings({
         aria-current={on ? "true" : undefined}
         className={`flex items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 text-left text-[13px] transition md:w-full ${on ? "bg-surface2 font-semibold text-text" : "text-dim hover:bg-surface2/60 hover:text-text"} max-md:border max-md:border-border`}
       >
-        <span className="whitespace-nowrap">{s}</span>
+        <span className="whitespace-nowrap">{s === "Basics" ? "The basics" : s}</span>
         {n > 0 && <span className="rounded-full bg-accent/15 px-1.5 font-mono text-[10px] text-accent tnum">{n}</span>}
       </button>
     );
@@ -469,7 +476,13 @@ export function BoxSettings({
 
   return (
     <div className="md:grid md:grid-cols-[176px_minmax(0,1fr)] md:gap-6">
-      <nav aria-label="Settings groups" className="mb-4 flex flex-wrap gap-1.5 md:mb-0 md:block md:space-y-0.5 md:self-start">
+      <nav aria-label="Settings groups" className="mb-4 flex flex-wrap items-center gap-1.5 md:mb-0 md:block md:space-y-0.5 md:self-start">
+        {basics.length > 0 && (
+          <>
+            {chip("Basics")}
+            <div className="w-full pt-2 text-[12px] font-semibold text-dim md:px-2.5 md:pt-4">Advanced</div>
+          </>
+        )}
         {SECTIONS.map(chip)}
       </nav>
 
@@ -529,13 +542,24 @@ export function BoxSettings({
                 Nothing changed: every setting is at its default.
               </p>
             ) : (
-              SECTIONS.filter((s) => s !== "Schedule & cost" && changedIn(s) > 0).map((s) => (
+              ([...(basics.length ? (["Basics"] as const) : []), ...SECTIONS] as (SettingsSection | "Basics")[])
+                .filter((s) => s !== "Schedule & cost" && changedIn(s) > 0)
+                .map((s) => (
                 <section key={s}>
-                  <h4 className={`mb-2 ${LABEL}`}>{s}</h4>
+                  <h4 className={`mb-2 ${LABEL}`}>{s === "Basics" ? "The basics" : s}</h4>
                   <FieldList defs={bySection(s)} vals={vals} set={set} claude={claude} onlyChanged />
                 </section>
               ))
             )
+          ) : active === "Basics" ? (
+            <section>
+              <h3 className="font-display text-base font-semibold text-text">The basics</h3>
+              <p className="mb-3 mt-0.5 text-xs text-dim">
+                The settings most people change. Everything else is under Advanced, with the same Save button.
+              </p>
+              <FieldList defs={basics} vals={vals} set={set} claude={claude} onlyChanged={false} extras={fieldExtras} />
+              {basicExtra && <div className="mt-4">{basicExtra((sec) => setActive(sec))}</div>}
+            </section>
           ) : (
             active !== "Schedule & cost" && (
               <section>

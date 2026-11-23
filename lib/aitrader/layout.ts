@@ -171,3 +171,19 @@ export function isShown(d: LimitDef, vals: Record<string, string>): boolean {
     return true;
   }
 }
+
+/**
+ * The few settings a box's Settings page shows first, in plain words, in this order; everything else is
+ * under "Advanced" (the sections above). Boxes not listed have no basics and show the sections only.
+ * Day Trader's "how often Claude checks" and the weekly cap are the shared runner's (Schedule & cost).
+ */
+export const BASIC_KEYS: Partial<Record<string, readonly string[]>> = {
+  "claude-day": ["enabled", "budget", "max_loss_per_trade_usd", "max_daily_loss_usd", "trade_universe", "flat_by", "allow_short"],
+  "claude-long": ["enabled", "budget", "position_pct", "emergency_stop_pct", "long_universe", "intraday_watch", "move_pct", "buy_needs_signal"],
+};
+
+/** A box's basic settings that exist in its table, in BASIC_KEYS order ([] = no basics). */
+export function basicDefs(bookKey: string, defs: LimitDef[]): LimitDef[] {
+  const keys = BASIC_KEYS[bookKey] ?? [];
+  return keys.map((k) => defs.find((d) => d.key === k)).filter((d): d is LimitDef => !!d);
+}
