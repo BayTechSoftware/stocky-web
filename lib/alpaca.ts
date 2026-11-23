@@ -266,6 +266,30 @@ export async function getDailyBars(c: Creds, symbols: string[], startDate: strin
   return out;
 }
 
+/** Intraday bars (e.g. "5Min") per symbol since `startIso`, oldest → newest (IEX feed). One page per chunk is plenty for a day. */
+export async function getIntradayBars(
+  c: Creds,
+  symbols: string[],
+  startIso: string,
+  timeframe: "1Min" | "5Min" | "15Min" = "5Min"
+): Promise<Record<string, Bar[]>> {
+  const out: Record<string, Bar[]> = {};
+  const uniq = Array.from(new Set(symbols));
+  for (let i = 0; i < uniq.length; i += 50) {
+    const chunk = uniq.slice(i, i + 50);
+    let pageToken: string | undefined;
+    for (let guard = 0; guard < 10; guard++) {
+      const q = new URLSearchParams({ symbols: chunk.join(","), timeframe, start: startIso, feed: "iex", limit: "10000" });
+      if (pageToken) q.set("page_token", pageToken);
+      const page = await call<{ bars: Record<string, Bar[]>; next_page_token: string | null }>(c, DATA, `/v2/stocks/bars?${q}`);
+      for (const [sym, bars] of Object.entries(page.bars ?? {})) (out[sym] ??= []).push(...bars);
+      if (!page.next_page_token) break;
+      pageToken = page.next_page_token;
+    }
+  }
+  return out;
+}
+
 /** Latest trade price per symbol (IEX). */
 export async function getLatestPrices(c: Creds, symbols: string[]): Promise<Record<string, number>> {
   const out: Record<string, number> = {};

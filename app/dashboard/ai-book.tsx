@@ -5,18 +5,16 @@ import { useRouter } from "next/navigation";
 import { closeRulesBox, loadRunDetail, removeNote, runAiTrader } from "../actions";
 import type { CloseOutLine, CloseOutResult } from "@/lib/aitrader/engine";
 import { money, moneySigned, pct, price as fprice, shares } from "@/lib/portfolio";
-import { CLAUDE_LIMITS, LONG_LIMITS, RUNNER_LIMITS, SCORECARD_GATE_LABEL, boxEnabled, defsForBook, effective, rulesDefs, type LimitValue } from "@/lib/aitrader/limits";
-import { OWN_ACCOUNT_KEYS, isClaudeKey } from "@/lib/aitrader/boxes";
+import { CLAUDE_LIMITS, LONG_LIMITS, RUNNER_LIMITS, SCORECARD_GATE_LABEL, defsForBook, effective, rulesDefs, type LimitValue } from "@/lib/aitrader/limits";
+import { isClaudeKey } from "@/lib/aitrader/boxes";
 import type { SettingsSection } from "@/lib/aitrader/layout";
 import { gateVerdict, marketLine, signedPct, type AiReviewShadow, type AiReviewTrade, type AiShadowItem } from "@/lib/aitrader/reviews";
 import type { AiBookView, AiNote, AiReplayDay, AiReview, AiRun, AiRunLite, ClosedTrade, ExitReason } from "@/lib/aitrader/view";
-import { ClaudePlan, LABEL, RunDetail, col, phaseName, when } from "./ai-run";
+import { LABEL, RunDetail, col, phaseName, when } from "./ai-run";
 import { BacktestPanel } from "./ai-backtest";
-import { BoxSettings, OffBadge, RunnerSettings } from "./ai-settings";
-import { HowItWorksLive } from "./ai-flow";
-import { AiChartPanel, AiChartsSection } from "./ai-charts";
+import { BoxSettings, RunnerSettings } from "./ai-settings";
 
-const BLURB: Record<AiBookView["key"], string> = {
+export const BLURB: Record<AiBookView["key"], string> = {
   mylist: "Fixed rules, no AI. Trades your watchlist on Stocky's signals, within your settings. Runs on the website on weekday schedules.",
   free: "Fixed rules, no AI. Buys daily chart setups across a hand-picked list of large US companies (minus your list), within your settings. Runs on the website on weekday schedules.",
   "claude-mylist":
@@ -77,7 +75,7 @@ function Meter({ label, used, max, fmt }: { label: string; used: number | null; 
   );
 }
 
-function LimitsUsed({ b }: { b: AiBookView }) {
+export function LimitsUsed({ b }: { b: AiBookView }) {
   const isClaude = isClaudeKey(b.key);
   if (b.key === "claude-long") return <LongLimitsUsed b={b} />;
   if (isClaude) {
@@ -182,7 +180,7 @@ function LoadedRun({ d, loading }: { d: { run: AiRun } | { error: string } | und
 }
 
 /** Today's runs, newest first; open one to load its full trace + pipeline. */
-function Timeline({ runs, latestId, next }: { runs: AiRunLite[]; latestId: string | null; next: string | null }) {
+export function Timeline({ runs, latestId, next }: { runs: AiRunLite[]; latestId: string | null; next: string | null }) {
   const { openId, detail, loading, toggle } = useRunDetails();
   if (!runs.length) {
     return (
@@ -418,7 +416,7 @@ function lessonUse(settings: AiBookView["settings"]) {
   return { use, count: Number.isFinite(want) && want >= 0 ? Math.floor(want) : 8 };
 }
 
-function DailyReviews({ reviews, notes, onLessons }: { reviews: AiReview[]; notes: AiNote[]; onLessons: () => void }) {
+export function DailyReviews({ reviews, notes, onLessons }: { reviews: AiReview[]; notes: AiNote[]; onLessons: () => void }) {
   const [all, setAll] = useState(false);
   const shown = all ? reviews : reviews.slice(0, 1);
   return (
@@ -638,7 +636,7 @@ function reviewDay(day: string): string {
 }
 
 /** Claude replays of past days (simulated on the Mac; never in this box's ledger). */
-function Replays({ days }: { days: AiReplayDay[] }) {
+export function Replays({ days }: { days: AiReplayDay[] }) {
   if (!days.length) {
     return (
       <div>
@@ -696,12 +694,12 @@ function held(min: number): string {
 }
 
 /** Entry cost of the shares an exit closed: proceeds less profit for a sell, cover cost plus profit for a cover. */
-function exitBasis(t: AiBookView["todayTrades"][number]): number {
+export function exitBasis(t: AiBookView["todayTrades"][number]): number {
   return t.pnl == null ? 0 : t.qty * t.price - (t.side === "sell" ? t.pnl : -t.pnl);
 }
 
 /** Every completed round trip, newest first: what each close made or lost. */
-function ClosedTrades({ trades }: { trades: ClosedTrade[] }) {
+export function ClosedTrades({ trades }: { trades: ClosedTrade[] }) {
   const [all, setAll] = useState(false);
   if (!trades.length) return <Block title="Closed trades"><Empty>No closed trades yet.</Empty></Block>;
   const shown = all ? trades : trades.slice(0, 10);
@@ -756,117 +754,11 @@ function ClosedTrades({ trades }: { trades: ClosedTrade[] }) {
   );
 }
 
-/** Where the price sits between the stop and the target (0 = at the stop, 1 = at the target). */
-function stopTargetPos(p: AiBookView["positions"][number]): number | null {
-  if (p.stop == null || p.target == null || p.price == null || p.target === p.stop) return null;
-  return Math.max(0, Math.min(1, (p.price - p.stop) / (p.target - p.stop)));
-}
-
-function PositionRow({
-  p,
-  isClaude,
-  chart,
-}: {
-  p: AiBookView["positions"][number];
-  isClaude: boolean;
-  /** claude-day / claude-long: a "Chart" toggle that opens the Mac's chart for this stock under the card. */
-  chart?: { bookKey: string; marketOpen: boolean | null };
-}) {
-  const [chartOpen, setChartOpen] = useState(false);
-  const short = p.qty < 0;
-  const pos = stopTargetPos(p);
-  const entryPos =
-    p.stop != null && p.target != null && p.target !== p.stop
-      ? Math.max(0, Math.min(1, (p.avgCost - p.stop) / (p.target - p.stop)))
-      : null;
-  return (
-    <li className={`min-w-0 rounded-xl border border-border bg-surface p-3.5 ${chartOpen ? "md:col-span-2" : ""}`}>
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <span className="font-display text-base font-semibold text-text">{p.symbol}</span>
-            <span
-              className={`rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider ${short ? "bg-loss/10 text-loss" : "bg-gain/10 text-gain"}`}
-            >
-              {short ? "Short" : "Long"}
-            </span>
-          </div>
-          <div className="mt-0.5 font-mono text-xs text-dim tnum">
-            {shares(Math.abs(p.qty))} sh · in at ${fprice(p.avgCost)} · {when(p.openedAt)}
-          </div>
-        </div>
-        <div className="shrink-0 text-right">
-          <div className={`font-mono text-base font-semibold tnum ${col(p.pnl)}`}>
-            {p.pnl != null ? moneySigned(p.pnl, 2) : "—"}
-          </div>
-          <div className="font-mono text-xs text-dim tnum">
-            {p.price != null ? `$${fprice(p.price)}` : "—"}
-            {p.pnlPct != null && <span className={col(p.pnl)}> · {pct(p.pnlPct)}</span>}
-          </div>
-        </div>
-      </div>
-
-      {pos != null ? (
-        <div className="mt-3">
-          <div className="relative h-2 rounded-full bg-gradient-to-r from-loss/25 via-surface2 to-gain/25">
-            {entryPos != null && (
-              <span
-                className="absolute top-1/2 h-3.5 w-px -translate-y-1/2 bg-faint"
-                style={{ left: `${entryPos * 100}%` }}
-                title="your entry"
-              />
-            )}
-            <span
-              className="absolute top-1/2 h-3.5 w-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-surface bg-text shadow"
-              style={{ left: `${pos * 100}%` }}
-              title="price now"
-            />
-          </div>
-          <div className="mt-1.5 flex justify-between font-mono text-[11px] tnum">
-            <span className="text-loss">stop ${fprice(p.stop as number)}</span>
-            <span className="text-gain">target ${fprice(p.target as number)}</span>
-          </div>
-        </div>
-      ) : (
-        <div className="mt-2 font-mono text-[11px] text-faint tnum">
-          {p.stop != null ? <span className="text-loss">stop ${fprice(p.stop)}</span> : "no stop on record"}
-          {p.target != null && <span className="text-gain"> · target ${fprice(p.target)}</span>}
-        </div>
-      )}
-
-      {p.reason && (
-        <p className="mt-2.5 border-t border-border pt-2 text-xs leading-relaxed text-dim">
-          <span className="text-faint">{isClaude ? (short ? "Why Claude shorted: " : "Why Claude bought: ") : "Why: "}</span>
-          {p.reason}
-        </p>
-      )}
-
-      {chart && (
-        <div className="mt-2.5 border-t border-border pt-2">
-          <button
-            type="button"
-            onClick={() => setChartOpen((o) => !o)}
-            aria-expanded={chartOpen}
-            className="text-xs font-medium text-accent hover:underline"
-          >
-            {chartOpen ? "Hide chart" : "Chart"}
-          </button>
-          {chartOpen && (
-            <div className="mt-2">
-              <AiChartPanel bookKey={chart.bookKey} symbol={p.symbol} marketOpen={chart.marketOpen} />
-            </div>
-          )}
-        </div>
-      )}
-    </li>
-  );
-}
-
-function Empty({ children }: { children: React.ReactNode }) {
+export function Empty({ children }: { children: React.ReactNode }) {
   return <p className="rounded-xl border border-dashed border-border px-4 py-6 text-center text-sm text-dim">{children}</p>;
 }
 
-function Block({ title, hint, children }: { title: string; hint?: string; children: React.ReactNode }) {
+export function Block({ title, hint, children }: { title: string; hint?: string; children: React.ReactNode }) {
   return (
     <section>
       <div className="mb-2 flex items-baseline justify-between gap-3">
@@ -888,7 +780,7 @@ const CLOSE_STATUS: Record<CloseOutLine["status"], { word: string; cls: string }
 };
 
 /** Rules boxes only: close this box's own positions (and its own orders on them), with a confirm list first. */
-function CloseBoxPanel({ bookKey, name }: { bookKey: string; name: string }) {
+export function CloseBoxPanel({ bookKey, name }: { bookKey: string; name: string }) {
   const [plan, setPlan] = useState<CloseOutResult | null>(null);
   const [done, setDone] = useState<CloseOutResult | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -1074,416 +966,62 @@ function GateVerdict({ day, g }: { day: string; g: AiReviewShadow["by_gate"][num
   );
 }
 
-/** "2:30 PM": about when the next check runs (latest run + the runner's interval), if still ahead. */
-function nextCheck(lastRunAt: string | null | undefined, runner: Record<string, LimitValue>, now: number): string | null {
-  if (!lastRunAt) return null;
-  const every = Number(effective(RUNNER_LIMITS, runner).interval_min) || 0;
-  const t = new Date(lastRunAt).getTime() + every * 60_000;
-  if (!every || !Number.isFinite(t) || t <= now) return null;
-  return new Date(t).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
-}
-
-type Section = "now" | "trades" | "charts" | "why" | "history" | "settings";
-
-export function BookCard({
+/** A box's settings form, wired as before: lessons, check verdicts, the shared schedule or the Rules run buttons. */
+export function BoxSettingsPanel({
   b,
   runner,
   weekCost,
-  initialSection,
   initialGroup,
-  marketOpen = null,
 }: {
   b: AiBookView;
   runner: Record<string, LimitValue>;
-  /** This week's Claude usage, the visible Claude boxes together. */
   weekCost: number;
-  initialSection?: Section;
   initialGroup?: SettingsSection;
-  /** Market open now (Alpaca clock; null = unknown): how often the live flow chart re-reads. */
-  marketOpen?: boolean | null;
 }) {
   const isClaude = isClaudeKey(b.key);
   const isLong = b.key === "claude-long";
-  // The Mac sends stock charts (ai_charts) for its own-account Claude boxes only.
-  const hasCharts = OWN_ACCOUNT_KEYS.includes(b.key);
-  const off = !boxEnabled(b.settings);
-  const run = b.lastRun;
   const defs = defsForBook(b.key);
-  const [section, setSection] = useState<Section>(initialSection ?? "now");
-  const [group, setGroup] = useState<SettingsSection | undefined>(initialGroup);
-  const [now] = useState(() => Date.now());
   // A Rules box's size is its start_cash; show the real one when no budget is saved.
   const saved = isClaude ? b.settings : { budget: b.startCash, ...b.settings };
   const budget = Number(effective(defs, saved).budget) || b.startCash;
-  const decided = b.wins + b.losses;
-  const closedToday = b.todayTrades.filter((t) => t.pnl != null);
-  const todayPnl = closedToday.reduce((a, t) => a + (t.pnl ?? 0), 0);
-  const openPnl = b.positions.reduce((a, p) => a + (p.pnl ?? 0), 0);
-  const entriesWaiting = b.pending.filter((o) => o.kind === "entry").length;
-  // Long-Term Claude looks once a day at its own time, not on the runner's interval.
-  const next = isLong ? `${String(effective(LONG_LIMITS, b.settings).run_at)} NY` : isClaude ? nextCheck(run?.ran_at, runner, now) : null;
-
-  const status = [
-    b.positions.length ? `Holding ${b.positions.length} stock${b.positions.length === 1 ? "" : "s"}` : "Nothing open",
-    closedToday.length ? `${closedToday.length} closed today, ${moneySigned(todayPnl, 2)}` : null,
-    entriesWaiting ? `${entriesWaiting} order${entriesWaiting === 1 ? "" : "s"} waiting to fill` : null,
-  ]
-    .filter(Boolean)
-    .join(" · ");
-
-  const tabs: { key: Section; label: string; count?: number }[] = [
-    { key: "now", label: "Now", count: b.positions.length + b.pending.length || undefined },
-    { key: "trades", label: "Trades", count: b.closed.length || undefined },
-    ...(hasCharts ? [{ key: "charts" as Section, label: "Charts" }] : []),
-    { key: "why", label: isClaude ? "Why & review" : "Latest run" },
-    ...(isClaude ? [{ key: "history" as Section, label: "History", count: b.today.length || undefined }] : []),
-    { key: "settings", label: "Settings" },
-  ];
-
-  const openSettings = (g: SettingsSection) => {
-    setGroup(g);
-    setSection("settings");
-  };
-
   const verdicts = isClaude ? latestGateVerdicts(b.reviews) : null;
   const fieldExtras: Record<string, ReactNode> = {};
   if (verdicts) {
     for (const [gate, g] of Object.entries(verdicts.byGate)) fieldExtras[`gate_${gate}`] = <GateVerdict day={verdicts.day} g={g} />;
   }
   const lessons = lessonUse(b.settings);
-
   return (
-    <div className="card rounded-2xl border border-border bg-surface">
-      {/* ---------- what Claude is doing now (first thing on a Claude box) ---------- */}
-      {isClaude && (
-        <div className="border-b border-border p-5 md:p-6">
-          <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
-            <h3 className="font-display text-sm font-semibold text-text">What Claude is doing now</h3>
-            {next && <span className="text-[11px] text-faint">{isLong ? `looks daily at ${next}` : `next check about ${next}`}</span>}
-          </div>
-          <div className="rounded-xl border border-border bg-surface2/40 p-4">
-            <ClaudePlan run={run} />
-          </div>
-          {OWN_ACCOUNT_KEYS.includes(b.key) && (
-            <div className="mt-4">
-              <HowItWorksLive bookKey={b.key} marketOpen={marketOpen} />
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* ---------- statement header ---------- */}
-      <header className="p-5 md:p-6">
-        <div className="flex items-start justify-between gap-4">
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <span
-                className={`rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider ${isClaude ? "bg-accent text-surface" : "bg-surface2 text-dim"}`}
-              >
-                {isClaude ? "Claude" : "Rules"}
-              </span>
-              <h2 className="font-display text-xl font-semibold tracking-tight text-text">{b.name}</h2>
-              {off && <OffBadge />}
-            </div>
-            {off && (
-              <p className="mt-1.5 max-w-prose rounded-md bg-loss/10 px-3 py-2 text-xs leading-snug text-loss">
-                This box is switched off: it places no new trades. Open positions keep their stops and exits. Turn it back on in Settings → Money &amp; risk.
+    <BoxSettings
+      key={b.key}
+      bookKey={b.key}
+      claude={isClaude}
+      long={isLong}
+      defs={defs}
+      saved={saved}
+      budget={budget}
+      initialSection={initialGroup}
+      fieldExtras={fieldExtras}
+      sectionExtras={isClaude && !isLong ? { Learning: <ReadsNext notes={b.notes} use={lessons.use} count={lessons.count} /> } : undefined}
+      scheduleBadge={isClaude ? "shared by all Claude boxes" : undefined}
+      schedule={(current) =>
+        isClaude ? (
+          <div className="space-y-3">
+            {isLong && (
+              <p className="rounded-lg bg-surface2/60 px-3 py-2 text-xs leading-snug text-dim">
+                Long-Term Claude looks once a day at its own time (Settings → When to trade). The model and the weekly
+                usage cap below apply to all Claude boxes; the check interval and news wake-ups are for the day-trading
+                boxes.
               </p>
             )}
-            <p className="mt-1.5 max-w-prose text-sm leading-relaxed text-dim">{BLURB[b.key]}</p>
+            <RunnerSettings defs={RUNNER_LIMITS} saved={runner} weekCost={weekCost} />
           </div>
-          <div className="hidden sm:block">
-            <Spark series={b.series} />
+        ) : (
+          <div className="space-y-3">
+            <RulesRunButtons />
+            <BacktestPanel bookKey={b.key} getValues={current} />
           </div>
-        </div>
-
-        <div className="mt-5 grid grid-cols-2 gap-x-6 gap-y-4 border-t border-border pt-5 sm:grid-cols-4">
-          <div className="col-span-2 sm:col-span-1">
-            <div className={LABEL}>Value now</div>
-            <div className="font-display text-3xl font-semibold tracking-tight text-text tnum">{money(b.equity, 2)}</div>
-            <div className={`font-mono text-sm tnum ${col(b.pnl)}`}>
-              {moneySigned(b.pnl, 2)} ({pct(b.pnlPct)}) all time
-            </div>
-          </div>
-          <Stat
-            label="Today (closed)"
-            value={closedToday.length ? moneySigned(todayPnl, 2) : "—"}
-            tone={closedToday.length ? todayPnl : null}
-            sub="closed trades only; open trades not included"
-          />
-          <Stat
-            label="Open trades (unrealised)"
-            value={b.positions.length ? moneySigned(openPnl, 2) : "—"}
-            tone={b.positions.length ? openPnl : null}
-            sub={`${money(b.cash, 2)} cash`}
-          />
-          <Stat
-            label="Win rate"
-            value={decided ? `${Math.round((b.wins / decided) * 100)}%` : "—"}
-            sub={decided ? `${b.wins} won · ${b.losses} lost` : "no closed trades yet"}
-          />
-        </div>
-
-        <p className="mt-4 rounded-lg bg-surface2/70 px-3 py-2 text-xs text-dim">{status}</p>
-      </header>
-
-      {/* ---------- section switcher (not sticky: the page's own tab bar already sticks at the top) ---------- */}
-      <nav className="border-y border-border bg-surface px-3 md:px-5" aria-label={`${b.name} sections`}>
-        <div className="-mb-px flex gap-1 overflow-x-auto">
-          {tabs.map((t) => {
-            const on = section === t.key;
-            return (
-              <button
-                key={t.key}
-                onClick={() => setSection(t.key)}
-                aria-current={on ? "true" : undefined}
-                className={`flex shrink-0 items-center gap-1.5 border-b-2 px-3 py-3 text-sm transition ${on ? "border-text font-semibold text-text" : "border-transparent text-dim hover:text-text"}`}
-              >
-                {t.label}
-                {t.count != null && (
-                  <span className={`rounded-full px-1.5 font-mono text-[10px] tnum ${on ? "bg-text text-surface" : "bg-surface2 text-dim"}`}>{t.count}</span>
-                )}
-              </button>
-            );
-          })}
-        </div>
-      </nav>
-
-      <div className="space-y-7 p-5 md:p-6">
-        {section === "now" && (
-          <>
-            <Block title="Open positions" hint={b.positions.length ? "dot = price now · line = your entry" : undefined}>
-              {b.positions.length === 0 ? (
-                <Empty>Nothing open right now.</Empty>
-              ) : (
-                <ul className="grid gap-3 md:grid-cols-2">
-                  {b.positions.map((p) => (
-                    <PositionRow key={p.symbol} p={p} isClaude={isClaude} chart={hasCharts ? { bookKey: b.key, marketOpen } : undefined} />
-                  ))}
-                </ul>
-              )}
-            </Block>
-
-            {b.pending.length > 0 && (
-              <Block title="Orders waiting">
-                <ul className="divide-y divide-border rounded-xl border border-border">
-                  {b.pending.map((o, i) => (
-                    <li key={i} className="flex items-baseline justify-between gap-3 px-3.5 py-2.5 text-sm">
-                      <span className="min-w-0">
-                        <span className={`font-semibold ${o.side === "buy" ? "text-gain" : "text-loss"}`}>
-                          {o.side === "sell" && o.kind === "entry" ? "Sell short" : o.side === "buy" && o.kind === "exit" ? "Buy to cover" : o.side === "buy" ? "Buy" : "Sell"}
-                        </span>{" "}
-                        <span className="font-mono tnum text-text">{shares(o.qty)}</span>{" "}
-                        <span className="font-display font-semibold text-text">{o.symbol}</span>
-                        <span className="block font-mono text-[11px] text-faint tnum">
-                          {o.limit != null && `limit $${fprice(o.limit)} · `}
-                          {o.stop != null && `stop $${fprice(o.stop)} · `}
-                          {o.target != null && `target $${fprice(o.target)} · `}
-                          {o.kind === "entry" ? "waiting to fill" : o.stop != null ? "protective stop" : "sell queued"}
-                        </span>
-                      </span>
-                      <span className="shrink-0 font-mono text-[11px] text-faint tnum">{when(o.created_at)}</span>
-                    </li>
-                  ))}
-                </ul>
-              </Block>
-            )}
-
-            {!isClaude && (b.positions.length > 0 || b.pending.length > 0) && (
-              <Block title="Close this box" hint={off ? "works while the box is off" : undefined}>
-                <CloseBoxPanel bookKey={b.key} name={b.name} />
-              </Block>
-            )}
-
-            <Block title={`Limits used${isClaude ? " today" : ""}`}>
-              <div className="rounded-xl border border-border p-4">
-                <LimitsUsed b={b} />
-              </div>
-            </Block>
-          </>
-        )}
-
-        {section === "charts" && hasCharts && (
-          <Block title="Charts" hint="what Claude sees for each stock">
-            <AiChartsSection bookKey={b.key} marketOpen={marketOpen} />
-          </Block>
-        )}
-
-        {section === "trades" && (
-          <>
-            <Block title="Today" hint={closedToday.length ? `${moneySigned(todayPnl, 2)} closed` : undefined}>
-              {b.todayTrades.length === 0 ? (
-                <Empty>No trades today.</Empty>
-              ) : (
-                <ul className="divide-y divide-border rounded-xl border border-border">
-                  {b.todayTrades.map((t, i) => (
-                    <li key={i} className="flex items-center justify-between gap-3 px-3.5 py-2.5 text-sm">
-                      <span className="min-w-0">
-                        <span className={`font-semibold ${t.side === "buy" ? "text-gain" : "text-loss"}`}>
-                          {t.role === "short" ? "Sold short" : t.role === "cover" ? "Bought to cover" : t.side === "buy" ? "Bought" : "Sold"}
-                        </span>{" "}
-                        <span className="font-mono text-text tnum">{shares(t.qty)}</span>{" "}
-                        <span className="font-display font-semibold text-text">{t.symbol}</span>
-                        <span className="block font-mono text-[11px] text-faint tnum">
-                          at ${fprice(t.price)} · {when(t.at, false)}
-                        </span>
-                      </span>
-                      {t.pnl != null ? (
-                        <span className={`shrink-0 text-right font-mono font-semibold tnum ${col(t.pnl)}`}>
-                          {moneySigned(t.pnl, 2)}
-                          {exitBasis(t) > 0 && <span className="block text-[11px] font-normal">{pct((t.pnl / exitBasis(t)) * 100)}</span>}
-                        </span>
-                      ) : (
-                        <span className="shrink-0 text-[11px] text-faint">opened</span>
-                      )}
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </Block>
-            <ClosedTrades trades={b.closed} />
-          </>
-        )}
-
-        {section === "why" && (
-          <>
-            <Block title={isClaude ? "Latest check, step by step" : "Latest run"} hint={run ? `${when(run.ran_at)} · ${run.mode}` : "not run yet"}>
-              {run ? (
-                <div className="rounded-xl border border-border bg-surface2/30 p-4">
-                  <RunDetail s={run.summary} error={run.error} mode={run.mode} />
-                </div>
-              ) : (
-                <Empty>
-                  {isClaude
-                    ? `Claude hasn't run in this box yet${next ? `; next check about ${next}` : ""}.`
-                    : "This box hasn't run yet. Rules boxes run on weekday schedules, or use Run now in Settings → Schedule & cost."}
-                </Empty>
-              )}
-            </Block>
-            {isClaude && (!isLong || b.reviews.length > 0) && (
-              <DailyReviews reviews={b.reviews} notes={b.notes} onLessons={() => openSettings("Learning")} />
-            )}
-          </>
-        )}
-
-        {section === "history" && isClaude && (
-          <>
-            <Timeline runs={b.today} latestId={run?.id ?? null} next={next} />
-            <Replays days={b.replays} />
-          </>
-        )}
-
-        {section === "settings" && (
-          <BoxSettings
-            key={b.key}
-            bookKey={b.key}
-            claude={isClaude}
-            long={isLong}
-            defs={defs}
-            saved={saved}
-            budget={budget}
-            initialSection={group}
-            fieldExtras={fieldExtras}
-            sectionExtras={isClaude && !isLong ? { Learning: <ReadsNext notes={b.notes} use={lessons.use} count={lessons.count} /> } : undefined}
-            scheduleBadge={isClaude ? "shared by all Claude boxes" : undefined}
-            schedule={(current) =>
-              isClaude ? (
-                <div className="space-y-3">
-                  {isLong && (
-                    <p className="rounded-lg bg-surface2/60 px-3 py-2 text-xs leading-snug text-dim">
-                      Long-Term Claude looks once a day at its own time (Settings → When to trade). The model and the weekly
-                      usage cap below apply to all Claude boxes; the check interval and news wake-ups are for the day-trading
-                      boxes.
-                    </p>
-                  )}
-                  <RunnerSettings defs={RUNNER_LIMITS} saved={runner} weekCost={weekCost} />
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  <RulesRunButtons />
-                  <BacktestPanel bookKey={b.key} getValues={current} />
-                </div>
-              )
-            }
-          />
-        )}
-      </div>
-    </div>
-  );
-}
-
-function Stat({ label, value, sub, tone }: { label: string; value: string; sub?: string; tone?: number | null }) {
-  return (
-    <div>
-      <div className={LABEL}>{label}</div>
-      <div className={`font-mono text-lg font-semibold tnum ${tone != null ? col(tone) : "text-text"}`}>{value}</div>
-      {sub && <div className="text-[11px] text-faint">{sub}</div>}
-    </div>
-  );
-}
-
-/** One box as a compact tile for the Overview tab. Clicking it opens the box's own tab. */
-export function BookTile({ b, onOpen }: { b: AiBookView; onOpen: () => void }) {
-  const isClaude = isClaudeKey(b.key);
-  const decided = b.wins + b.losses;
-  const todayPnl = b.todayTrades.reduce((a, t) => a + (t.pnl ?? 0), 0);
-  const hasToday = b.todayTrades.some((t) => t.pnl != null);
-  return (
-    <button
-      onClick={onOpen}
-      className="card group flex w-full flex-col rounded-2xl border border-border bg-surface p-4 text-left transition hover:border-accent/50 hover:bg-surface2/40"
-    >
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex min-w-0 items-center gap-2">
-          <span
-            className={`rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider ${isClaude ? "bg-accent/10 text-accent" : "bg-surface2 text-dim"}`}
-          >
-            {isClaude ? "Claude" : "Rules"}
-          </span>
-          <span className="truncate font-display font-semibold text-text">{b.name}</span>
-        </div>
-        <Spark series={b.series} />
-      </div>
-      <div className="mt-3 font-display text-2xl font-semibold text-text tnum">{money(b.equity, 2)}</div>
-      <div className={`font-mono text-sm tnum ${col(b.pnl)}`}>
-        {moneySigned(b.pnl, 2)} ({pct(b.pnlPct)})
-      </div>
-      <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1 border-t border-border pt-3 text-xs">
-        <dt className="text-faint">Positions</dt>
-        <dd className="text-right font-mono text-text tnum">{b.positions.length}</dd>
-        <dt className="text-faint">Closed today</dt>
-        <dd className={`text-right font-mono tnum ${hasToday ? col(todayPnl) : "text-dim"}`}>
-          {hasToday ? moneySigned(todayPnl, 2) : "—"}
-        </dd>
-        <dt className="text-faint">Win rate</dt>
-        <dd className="text-right font-mono text-text tnum">{decided ? `${Math.round((b.wins / decided) * 100)}% of ${decided}` : "—"}</dd>
-        <dt className="text-faint">Last run</dt>
-        <dd className="truncate text-right font-mono text-dim tnum">{b.lastRun ? when(b.lastRun.ran_at) : "not yet"}</dd>
-      </dl>
-      <span className="mt-3 text-xs text-dim group-hover:text-accent">Open details →</span>
-    </button>
-  );
-}
-
-/** Tiny equity sparkline (needs ≥ 2 daily snapshots). */
-function Spark({ series }: { series: { as_of: string; equity: number }[] }) {
-  if (series.length < 2) return null;
-  const w = 96;
-  const h = 32;
-  const ys = series.map((s) => s.equity);
-  const lo = Math.min(...ys);
-  const hi = Math.max(...ys);
-  const pts = ys
-    .map((y, i) => {
-      const x = (i / (ys.length - 1)) * w;
-      const yy = hi === lo ? h / 2 : h - ((y - lo) / (hi - lo)) * h;
-      return `${x.toFixed(1)},${yy.toFixed(1)}`;
-    })
-    .join(" ");
-  const up = ys[ys.length - 1] >= ys[0];
-  return (
-    <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} className={`shrink-0 ${up ? "text-gain" : "text-loss"}`} aria-hidden>
-      <polyline points={pts} fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
-    </svg>
+        )
+      }
+    />
   );
 }

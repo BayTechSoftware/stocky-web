@@ -191,7 +191,16 @@ function FeedRow({ e, withDay, symbol, onPick }: { e: AiEvent; withDay: boolean;
  * feed. Loads only while open; while it shows today it re-reads every 15 s (market open) or 2 min
  * (closed), pausing while the tab is hidden, like LiveUpdates.
  */
-export function HowItWorksLive({ bookKey, marketOpen: clockOpen }: { bookKey: string; marketOpen: boolean | null }) {
+export function HowItWorksLive({
+  bookKey,
+  marketOpen: clockOpen,
+  embedded = false,
+}: {
+  bookKey: string;
+  marketOpen: boolean | null;
+  /** Inside an expander that is already open (the box page's details list): no fold of its own. */
+  embedded?: boolean;
+}) {
   // The Alpaca clock when the website has it, else New York's regular session hours.
   const marketOpen = clockOpen ?? marketOpenET();
   const [open, setOpen] = useState(true);
@@ -213,11 +222,11 @@ export function HowItWorksLive({ bookKey, marketOpen: clockOpen }: { bookKey: st
       const saved = localStorage.getItem(storeKey);
       // Read after hydration so the server and first client render match.
       // eslint-disable-next-line react-hooks/set-state-in-effect
-      if (saved != null) setOpen(saved === "1");
+      if (saved != null && !embedded) setOpen(saved === "1");
     } catch {
       /* storage blocked */
     }
-  }, [storeKey]);
+  }, [storeKey, embedded]);
 
   const fetchNow = useCallback(async () => {
     const n = ++seq.current;
@@ -281,31 +290,8 @@ export function HowItWorksLive({ bookKey, marketOpen: clockOpen }: { bookKey: st
     setLimit(PAGE);
   }
 
-  return (
-    <details
-      open={open}
-      onToggle={(e) => {
-        const o = (e.currentTarget as HTMLDetailsElement).open;
-        setOpen(o);
-        try {
-          localStorage.setItem(storeKey, o ? "1" : "0");
-        } catch {
-          /* storage blocked */
-        }
-      }}
-      className="group rounded-xl border border-border"
-    >
-      <summary className="flex cursor-pointer select-none flex-wrap items-center gap-2 px-4 py-3">
-        <span className="font-display text-sm font-semibold text-text">How it works — live</span>
-        {showingToday && open && !err && (
-          <span className={`h-2 w-2 rounded-full ${marketOpen ? "animate-pulse bg-gain" : "bg-faint"}`} aria-hidden />
-        )}
-        <span className="ml-auto text-[11px] text-faint">
-          {open ? (loading ? "updating…" : data ? `updated ${nyTime(data.at)} NY` : "") : "every step the Mac records, as it happens"}
-        </span>
-      </summary>
-
-      <div className="space-y-3 border-t border-border p-3">
+  const body = (
+      <div className={embedded ? "space-y-3" : "space-y-3 border-t border-border p-3"}>
         <div className="flex flex-wrap items-center gap-1.5">
           {days.map((d) => {
             const on = (day ?? today) === d;
@@ -468,6 +454,34 @@ export function HowItWorksLive({ bookKey, marketOpen: clockOpen }: { bookKey: st
 
         <p className="text-[11px] text-faint">Click a stock to follow it through the steps. Hover a step for its full text.</p>
       </div>
+  );
+  if (embedded) return body;
+
+  return (
+    <details
+      open={open}
+      onToggle={(e) => {
+        const o = (e.currentTarget as HTMLDetailsElement).open;
+        setOpen(o);
+        try {
+          localStorage.setItem(storeKey, o ? "1" : "0");
+        } catch {
+          /* storage blocked */
+        }
+      }}
+      className="group rounded-xl border border-border"
+    >
+      <summary className="flex cursor-pointer select-none flex-wrap items-center gap-2 px-4 py-3">
+        <span className="font-display text-sm font-semibold text-text">How it works — live</span>
+        {showingToday && open && !err && (
+          <span className={`h-2 w-2 rounded-full ${marketOpen ? "animate-pulse bg-gain" : "bg-faint"}`} aria-hidden />
+        )}
+        <span className="ml-auto text-[11px] text-faint">
+          {open ? (loading ? "updating…" : data ? `updated ${nyTime(data.at)} NY` : "") : "every step the Mac records, as it happens"}
+        </span>
+      </summary>
+
+      {body}
     </details>
   );
 }

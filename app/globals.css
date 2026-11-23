@@ -17,6 +17,17 @@
   --color-overbought: #d2582a;/* burnt orange */
   --color-accent: #1b1a17;    /* near-black primary */
 
+  /* AI Trader pages: one link / "now" blue, the paper badge, tinted strips, secondary ink */
+  --color-link: #2f55c8;
+  --color-link-hover: #1e3e9e;
+  --color-paper: #7a5200;
+  --color-paper-bg: #fbefd5;
+  --color-gain-tint: #e6f3ee;
+  --color-gain-ink: #0b5c47;
+  --color-loss-tint: #fbede8;
+  --color-loss-ink: #8e2d16;
+  --color-sub: #55544d;
+
   /* fonts (next/font sets the source vars on <html>) */
   --font-display: var(--font-schibsted), ui-sans-serif, system-ui, sans-serif;
   --font-sans: var(--font-hanken), ui-sans-serif, system-ui, sans-serif;
@@ -68,4 +79,31 @@ body {
 ::-webkit-scrollbar-thumb {
   background: var(--color-border);
   border-radius: 9px;
+}
+
+/* ---------------- AI Trader pages ---------------- */
+
+/* Colour-blind-friendlier gain / loss on the AI pages only (always paired with ▲/▼ or +/−). */
+.ai-page {
+  --color-gain: #0f7b5f;
+  --color-loss: #b23a1e;
+}
+
+/* The one card style: white, hairline border, 16px radius, 18px padding on phones, 24px from 768px. */
+.ai-card {
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 16px;
+  padding: 18px;
+}
+@media (min-width: 768px) {
+  .ai-card {
+    padding: 24px;
+  }
+}
+.ai-card-flush {
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 16px;
+  overflow: hidden;
 }

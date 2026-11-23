@@ -168,7 +168,7 @@ export function tradesFromFills(
   fills: { order_id: string; symbol: string; side: string; qty: number; price: number; transacted_at: string; role?: FillRole }[],
   /** Realized P&L per exit order (from the ledger); orders not in it (entries, basis-less sells) get null. */
   pnlByOrder?: Map<string, number>
-): { at: string; symbol: string; side: string; qty: number; price: number; role: FillRole; pnl: number | null }[] {
+): { at: string; symbol: string; side: string; qty: number; price: number; role: FillRole; pnl: number | null; orderId: string }[] {
   const by = new Map<string, { id: string; at: string; symbol: string; side: string; qty: number; cost: number; role: FillRole }>();
   for (const f of fills) {
     const t = by.get(f.order_id) ?? { id: f.order_id, at: f.transacted_at, symbol: f.symbol, side: f.side, qty: 0, cost: 0, role: f.role ?? null };
@@ -178,6 +178,6 @@ export function tradesFromFills(
     by.set(f.order_id, t);
   }
   return Array.from(by.values())
-    .map((t) => ({ at: t.at, symbol: t.symbol, side: t.side, qty: t.qty, price: t.qty > 0 ? t.cost / t.qty : 0, role: t.role, pnl: pnlByOrder?.get(t.id) ?? null }))
+    .map((t) => ({ at: t.at, symbol: t.symbol, side: t.side, qty: t.qty, price: t.qty > 0 ? t.cost / t.qty : 0, role: t.role, pnl: pnlByOrder?.get(t.id) ?? null, orderId: t.id }))
     .sort((a, b) => (a.at < b.at ? 1 : -1));
 }

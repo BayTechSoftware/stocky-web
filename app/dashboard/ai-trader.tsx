@@ -7,7 +7,8 @@ import type { SettingsSection } from "@/lib/aitrader/layout";
 import type { AiBookView, AiView } from "@/lib/aitrader/view";
 import { hiddenBooks, isClaudeKey, showSharedAccount, totalsOf, visibleBooks } from "@/lib/aitrader/boxes";
 import { LABEL, claudeNowLine, when } from "./ai-run";
-import { BookCard, col } from "./ai-book";
+import { BoxSettingsPanel, col } from "./ai-book";
+import { BoxPage, LinkButton } from "./ai-box";
 import { ConnectCard, OffBadge, UsageMeter } from "./ai-settings";
 import LiveUpdates from "./ai-live";
 
@@ -92,8 +93,43 @@ export default function AiTrader({ ai }: { ai: AiView | null }) {
   const model = String(effective(RUNNER_LIMITS, ai.runner).model);
   const current = books.find((b) => b.key === open.tab) ?? null;
 
+  if (current && open.section === "settings") {
+    return (
+      <section className="ai-page mt-3 flex flex-col gap-4 md:gap-6">
+        <nav className="text-[14px]">
+          <LinkButton onClick={() => pick(current.key)} className="min-h-11">
+            ← Back to {current.name}
+          </LinkButton>
+        </nav>
+        <h1 className="font-display text-[24px] font-bold tracking-[-0.01em] text-text md:text-[30px]">Settings · {current.name}</h1>
+        <div className="ai-card">
+          <BoxSettingsPanel key={`${current.key}-${open.n}`} b={current} runner={ai.runner} weekCost={weekCost} initialGroup={open.group} />
+        </div>
+      </section>
+    );
+  }
+  if (current) {
+    return (
+      <section className="ai-page mt-3">
+        <BoxPage
+          key={current.key}
+          b={current}
+          runner={ai.runner}
+          marketOpen={ai.marketOpen}
+          clock={ai.clock}
+          error={ai.error}
+          onBack={() => pick("overview")}
+          onSettings={(g) => pick(current.key, "settings", g)}
+        />
+        <div className="mt-6">
+          <LiveUpdates marketOpen={ai.marketOpen} />
+        </div>
+      </section>
+    );
+  }
+
   return (
-    <section className="mt-3 space-y-4">
+    <section className="ai-page mt-3 space-y-4">
       <div className="card rounded-2xl border border-border bg-surface p-4 md:p-5">
         <div className="flex flex-wrap items-center gap-2">
           <span className="rounded-full bg-watch/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-watch ring-1 ring-inset ring-watch/30">
@@ -142,7 +178,7 @@ export default function AiTrader({ ai }: { ai: AiView | null }) {
       <nav className="-mx-4 overflow-x-auto px-4 md:mx-0 md:px-0" aria-label="AI Trader boxes">
         <div className="flex min-w-max gap-1 rounded-xl border border-border bg-surface p-1">
           {[{ key: "overview", name: "Overview", isClaude: null as boolean | null, pnl: null as number | null, off: false }, ...books.map((b) => ({ key: b.key as string, name: b.name, isClaude: isClaudeKey(b.key), pnl: b.pnl, off: !boxEnabled(b.settings) }))].map((t) => {
-            const on = (current?.key ?? "overview") === t.key;
+            const on = t.key === "overview";
             return (
               <button
                 key={t.key}
@@ -162,19 +198,8 @@ export default function AiTrader({ ai }: { ai: AiView | null }) {
         </div>
       </nav>
 
-      {current ? (
-        <BookCard
-          key={`${current.key}-${open.n}`}
-          b={current}
-          runner={ai.runner}
-          weekCost={weekCost}
-          initialSection={open.section}
-          initialGroup={open.group}
-          marketOpen={ai.marketOpen}
-        />
-      ) : (
-        <>
-          {/* The visible boxes side by side (Day Trader Claude vs Long-Term Claude first) */}
+      {(
+        <>          {/* The visible boxes side by side (Day Trader Claude vs Long-Term Claude first) */}
           {books.length > 0 && (
             <div className="card rounded-2xl border border-border bg-surface p-4 md:p-5">
               <h3 className="font-display text-sm font-semibold text-text">Side by side</h3>

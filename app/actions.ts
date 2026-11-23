@@ -9,11 +9,11 @@ import { RUNNER_LIMITS, defsForBook, effective, overridesOnly, validateLimits } 
 import type { AiRun } from "@/lib/aitrader/view";
 import { planLiveSync, syncWindow, type KnownOrder } from "@/lib/aitrader/live";
 import { OWN_ACCOUNT_KEYS, onSharedAccount } from "@/lib/aitrader/boxes";
-import { SYMBOL_SPAN_DAYS, addDays, inRecent, nyDate, nyDayBounds, toEvents, type AiFlowData } from "@/lib/aitrader/flow";
+import { SYMBOL_SPAN_DAYS, addDays, inRecent, isDay, nyDate, nyDayBounds, toEvents, type AiEvent, type AiFlowData } from "@/lib/aitrader/flow";
 import { normalizeChart, sortCharts, toChartListItem, type ChartData, type ChartListItem, type ChartRole } from "@/lib/aitrader/charts";
 import { loadOrders, must } from "@/lib/aitrader/rows";
 import { baselineOf, loadAdjustments, sizeOf } from "@/lib/aitrader/cash";
-import { AlpacaError, getClock, getDailyBars, getPaperAccount, listFills, listOrders, type Bar, type Creds } from "@/lib/alpaca";
+import { AlpacaError, getClock, getDailyBars, getIntradayBars, getPaperAccount, listFills, listOrders, type Bar, type Creds } from "@/lib/alpaca";
 import { rulesFor } from "@/lib/aitrader/plan";
 import { freeUniverse } from "@/lib/aitrader/universe";
 import { etDate } from "@/lib/aitrader/decide";
@@ -720,6 +720,78 @@ export async function loadAiFlow(req: {
     truncated: nodes.length > FLOW_NODE_CAP,
     at: new Date().toISOString(),
   };
+}
+
+/* ---------------- AI Trader: the box page's "Right now" and market comparison ---------------- */
+
+/** Newest steps read for "Right now" (no every-minute checks; those are counted). */
+const NOW_EVENTS = 30;
+
+/**
+ * What a Claude box did today, light: its newest recorded steps (no minute checks) and the minute checks'
+ * count + time of the latest. Three small reads (RLS: only the user's own books' events).
+ */
+export async function loadAiNow(
+  bookKey: string
+): Promise<{ today: string; events: AiEvent[]; watch: { count: number; latestAt: string | null }; at: string } | { error: string }> {
+  const b = await chartBook(String(bookKey));
+  if ("error" in b) return b;
+  const today = nyDate();
+  const { start, end } = nyDayBounds(today);
+  const day = () => b.supabase.from("ai_events").select("id, at, step, symbol, title, ok, run_ref").eq("book_id", b.bookId).gte("at", start).lt("at", end);
+  const [evR, wN, wL] = await Promise.all([
+    day().neq("step", "watch").order("at", { ascending: false }).order("id", { ascending: false }).limit(NOW_EVENTS),
+    b.supabase.from("ai_events").select("id", { count: "exact", head: true }).eq("book_id", b.bookId).eq("step", "watch").gte("at", start).lt("at", end),
+    day().eq("step", "watch").order("at", { ascending: false }).limit(1),
+  ]);
+  const err = evR.error ?? wN.error ?? wL.error;
+  if (err) return { error: err.message };
+  const latest = toEvents(wL.data)[0] ?? null;
+  return { today, events: toEvents(evR.data), watch: { count: wN.count ?? 0, latestAt: latest?.at ?? null }, at: new Date().toISOString() };
+}
+
+/** Symbols and days the market comparison may ask for. */
+const MARKET_MAX_SYMBOLS = 40;
+const MARKET_MAX_DAYS = 800;
+
+/**
+ * Market data for "this box vs the S&P 500", read with the user's own Alpaca paper keys (any key reads
+ * market data). `since` (YYYY-MM-DD): SPY's daily bars from then. `intraday`: today's 5-minute bars for
+ * SPY and the given symbols (what the box held or traded today), to rebuild the box's day.
+ * No keys = { error }: the page then hides the comparison.
+ */
+export async function loadAiMarket(req: {
+  since: string;
+  intraday?: { symbols: string[] } | null;
+}): Promise<
+  | { today: string; daily: { t: string; c: number }[]; intraday: Record<string, { t: string; o: number; c: number }[]> | null }
+  | { error: string }
+> {
+  const { user } = await uid();
+  if (!user) return { error: "not signed in" };
+  const today = nyDate();
+  const earliest = addDays(today, -MARKET_MAX_DAYS);
+  if (!isDay(req?.since)) return { error: "bad date" };
+  const since = req.since < earliest ? earliest : req.since > today ? today : req.since;
+  const symbols = req.intraday
+    ? Array.from(new Set((Array.isArray(req.intraday.symbols) ? req.intraday.symbols : []).map((s) => cleanSymbol(String(s ?? ""))).filter(Boolean))).slice(0, MARKET_MAX_SYMBOLS)
+    : null;
+  try {
+    const creds = await loadCreds(createAdminClient(), user.id);
+    if (!creds) return { error: "not connected" };
+    const [daily, intra] = await Promise.all([
+      getDailyBars(creds, ["SPY"], since),
+      symbols ? getIntradayBars(creds, ["SPY", ...symbols.filter((s) => s !== "SPY")], nyDayBounds(today).start, "5Min") : Promise.resolve(null),
+    ]);
+    const slim = (bars: Bar[] | undefined) => (bars ?? []).map((b) => ({ t: b.t, o: b.o, c: b.c }));
+    return {
+      today,
+      daily: slim(daily.SPY).map(({ t, c }) => ({ t, c })),
+      intraday: intra ? Object.fromEntries(Object.entries(intra).map(([k, v]) => [k, slim(v)])) : null,
+    };
+  } catch (e) {
+    return { error: e instanceof AlpacaError || e instanceof Error ? e.message : String(e) };
+  }
 }
 
 /* ---------------- AI Trader: stock charts (ai_charts, written by the Mac) ---------------- */

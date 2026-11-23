@@ -7,7 +7,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { createAdminClient } from "@/lib/supabase/admin";
 import * as A from "@/lib/alpaca";
-import { bookState, fillRole, ledgerFills, shortOrderIds, type ClosedTrade, type FillRole, type OrderMeta } from "./ledger";
+import { bookState, fillRole, inferExitReason, ledgerFills, shortOrderIds, type ClosedTrade, type ExitReason, type FillRole, type OrderMeta } from "./ledger";
 import { notesFrom, reviewsFrom, type AiNote, type AiReview } from "./reviews";
 import { tradesFromFills } from "./live";
 import { loadCreds, type ReplayInfo, type RunSummary, type RunUsage } from "./engine";
@@ -59,6 +59,8 @@ export interface AiBookView {
   name: string;
   /** ai_books.hidden: left out of the tab bar, totals and comparisons; its data still loads. */
   hidden: boolean;
+  /** When the box was made (ai_books.created_at): "since <date>"; null when unknown. */
+  createdAt: string | null;
   startCash: number;
   cash: number;
   equity: number;
@@ -73,7 +75,19 @@ export interface AiBookView {
   pending: AiOrderView[];
   lastRun: AiRun | null;
   /** Everything bought or sold today (NY day), newest first. */
-  todayTrades: { at: string; symbol: string; side: string; qty: number; price: number; role: FillRole; pnl: number | null }[];
+  todayTrades: {
+    at: string;
+    symbol: string;
+    side: string;
+    qty: number;
+    price: number;
+    role: FillRole;
+    pnl: number | null;
+    /** The order's recorded reason (an entry: why Claude bought), when there is one. */
+    reason: string | null;
+    /** An exit's cause (stop, target, …); null for entries. */
+    exit: ExitReason | null;
+  }[];
   /** Completed round trips (flat -> position -> flat), newest first, capped at 100. */
   closed: ClosedTrade[];
   /** Today's runs (NY day), newest first, without the heavy trace — open one to load it. Replays excluded. */
@@ -123,6 +137,8 @@ export interface AiView {
   books: AiBookView[];
   accountEquity: number | null;
   marketOpen: boolean | null;
+  /** The Alpaca clock's next open / close (ISO), when the website could read it. */
+  clock: { nextOpen: string; nextClose: string } | null;
   /** Where position prices came from. */
   prices: "live" | "mac";
   connection: { hint: string | null; connected_at: string } | null;
@@ -160,12 +176,12 @@ export async function loadAiView(
 ): Promise<AiView | null> {
   const withHidden = await supabase
     .from("ai_books")
-    .select("id, key, name, start_cash, settings, hidden")
+    .select("id, key, name, start_cash, settings, hidden, created_at")
     .order("key", { ascending: true });
   // Before supabase/day_long.sql adds ai_books.hidden that select fails: read without it (nothing hidden)
   // rather than lose the AI tab.
   const books: Record<string, unknown>[] | null = withHidden.error
-    ? (await supabase.from("ai_books").select("id, key, name, start_cash, settings").order("key", { ascending: true })).data
+    ? (await supabase.from("ai_books").select("id, key, name, start_cash, settings, created_at").order("key", { ascending: true })).data
     : withHidden.data;
   if (!books?.length) return null;
   const ids = books.map((b) => b.id as string);
@@ -270,6 +286,7 @@ export async function loadAiView(
   let error: string | null = null;
   let accountEquity: number | null = null;
   let marketOpen: boolean | null = null;
+  let clockTimes: AiView["clock"] = null;
   const px = new Map<string, number>();
   if (opts && connR.data) {
     try {
@@ -282,6 +299,7 @@ export async function loadAiView(
         ]);
         accountEquity = Number(acct.equity);
         marketOpen = clock.is_open;
+        if (clock.next_open && clock.next_close) clockTimes = { nextOpen: clock.next_open, nextClose: clock.next_close };
         for (const p of positions) px.set(p.symbol, Number(p.current_price));
       }
     } catch (e) {
@@ -399,7 +417,13 @@ export async function loadAiView(
           role: fillRole(f.side as string, f.order_id as string, shortEntries, coverIds),
         })),
       st.exitPnl
-    );
+    ).map(({ orderId, ...t }) => {
+      // An entry's reason is on its own order (or the bracket parent of a leg); an exit's cause is inferred.
+      const own = bookOrders.find((o) => o.alpaca_order_id === orderId) ?? bookOrders.find((o) => (o.leg_ids as string[] | null)?.includes(orderId));
+      const exit = t.pnl != null ? inferExitReason({ order_id: orderId, price: t.price, transacted_at: t.at }, bookOrders as OrderMeta[]) : null;
+      const reason = t.pnl == null && typeof own?.reason === "string" && own.reason.trim() ? own.reason.trim() : null;
+      return { ...t, reason, exit };
+    });
     const today: AiRunLite[] =((todayR.data ?? []) as Record<string, unknown>[])
       .filter((r) => r.book_id === b.id)
       .map((r) => {
@@ -421,6 +445,7 @@ export async function loadAiView(
       key: b.key as AiBookKey,
       name: b.name as string,
       hidden: b.hidden === true,
+      createdAt: typeof b.created_at === "string" ? b.created_at : null,
       startCash: start,
       // Free cash, as the Mac sizes from it: a short's proceeds aren't spendable and its notional is collateral.
       cash: st.cash - 2 * positions.reduce((a, p) => a + (p.qty < 0 ? -p.qty * p.avgCost : 0), 0),
@@ -469,6 +494,7 @@ export async function loadAiView(
     books: sortBooks(views),
     accountEquity,
     marketOpen,
+    clock: clockTimes,
     prices: px.size ? "live" : "mac",
     connection: conn ? { hint: conn.account_hint, connected_at: conn.connected_at } : null,
     runner: ((runnerR.data as { settings?: Record<string, number | string> } | null)?.settings) ?? {},
