@@ -25,7 +25,7 @@ describe("defsForBook routing", () => {
     expect(defsForBook("claude-long")).toBe(LONG_LIMITS);
     expect(defsForBook("claude-free")).toBe(CLAUDE_LIMITS);
     expect(defsForBook("claude-mylist")).toBe(CLAUDE_LIMITS);
-    expect(keys(DAY_LIMITS)).toEqual([...keys(CLAUDE_LIMITS), "trade_universe"]);
+    expect(keys(DAY_LIMITS)).toEqual([...keys(CLAUDE_LIMITS), "trade_universe", "trade_style", "max_hold_days", "swing_am", "swing_pm", "swing_move_pct"]);
   });
 
   it("trade_universe is only on claude-day", () => {

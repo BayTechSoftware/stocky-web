@@ -306,3 +306,11 @@ describe("basic settings", () => {
     expect(basicDefs("mylist", defsForBook("mylist"))).toEqual([]);
   });
 });
+
+describe("statusSentence (swing)", () => {
+  it("describes the swing trader", () => {
+    expect(
+      statusSentence({ key: "claude-day", off: false, cfg: { trade_style: "swing", max_hold_days: 5, swing_am: "09:45", swing_pm: "15:30" }, runner: {}, lastRunAt: null, nowMs: 0, marketOpen: true }),
+    ).toBe("Swing trader: holds 1–5 days · looks at 09:45 and 15:30 · wakes Claude on big moves and news");
+  });
+});

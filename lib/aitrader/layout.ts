@@ -178,7 +178,7 @@ export function isShown(d: LimitDef, vals: Record<string, string>): boolean {
  * Day Trader's "how often Claude checks" and the weekly cap are the shared runner's (Schedule & cost).
  */
 export const BASIC_KEYS: Partial<Record<string, readonly string[]>> = {
-  "claude-day": ["enabled", "budget", "max_loss_per_trade_usd", "max_daily_loss_usd", "trade_universe", "flat_by", "allow_short"],
+  "claude-day": ["enabled", "trade_style", "budget", "max_loss_per_trade_usd", "max_daily_loss_usd", "max_trades_per_day", "max_hold_days", "trade_universe", "allow_short"],
   "claude-long": ["enabled", "budget", "position_pct", "emergency_stop_pct", "long_universe", "intraday_watch", "move_pct", "buy_needs_signal"],
 };
 

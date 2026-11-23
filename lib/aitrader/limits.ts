@@ -309,6 +309,11 @@ export const CLAUDE_LIMITS: LimitDef[] = [
 export const DAY_LIMITS: LimitDef[] = [
   ...CLAUDE_LIMITS,
   { key: "trade_universe", group: "Symbols", label: "Stocks Claude may trade", kind: "select", options: ["free", "watchlist"], optionLabels: { free: "Free choice", watchlist: "Watchlist only" }, def: "free", hint: "Watchlist only: Claude may only open trades in stocks on your watchlist (exits are always allowed)." },
+  { key: "trade_style", group: "Timing", label: "Trading style", kind: "select", options: ["swing", "day"], optionLabels: { swing: "Swing: hold 1–5 days", day: "Day trading: in and out the same day" }, def: "day", hint: "Swing: buys strong stocks on the daily chart and holds them for days (stops stay at Alpaca overnight). The day-trading timing and exit settings don't apply to it." },
+  { key: "max_hold_days", group: "Timing", label: "Sell after holding (trading days)", unit: "days", kind: "number", min: 1, max: 30, int: true, def: 5, hint: "Swing: the Mac sells a position held this many trading days, after the morning look." },
+  { key: "swing_am", group: "Timing", label: "Morning look (NY time)", kind: "time", def: "09:45", tmin: "09:35", tmax: "12:00", hint: "Swing: Claude re-checks what it holds after the open." },
+  { key: "swing_pm", group: "Timing", label: "Afternoon look (NY time)", kind: "time", def: "15:30", tmin: "13:00", tmax: "15:45", hint: "Swing: the main time to buy — stocks closing strong — and to decide what to keep overnight." },
+  { key: "swing_move_pct", group: "Timing", label: "Wake Claude when a held stock moves", unit: "%", kind: "number", min: 0, max: 50, def: 4, hint: "Swing: a held stock up or down this much today wakes Claude. 0 = off." },
 ];
 
 /** Overkill indicator inputs (the owner's TradingView script): same keys' defaults as the script. */

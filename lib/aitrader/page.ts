@@ -371,6 +371,10 @@ export function statusSentence(opts: {
 }): string {
   if (opts.off) return "Switched off: opens nothing new, still manages what it holds";
   const { cfg } = opts;
+  if (opts.key === "claude-day" && cfg.trade_style === "swing") {
+    const days = Number(cfg.max_hold_days) || 5;
+    return `Swing trader: holds 1–${days} days · looks at ${String(cfg.swing_am ?? "09:45")} and ${String(cfg.swing_pm ?? "15:30")} · wakes Claude on big moves and news`;
+  }
   if (opts.key === "claude-day") {
     const every = Number(opts.runner.interval_min) || 0;
     const next = opts.lastRunAt && every ? Date.parse(opts.lastRunAt) + every * 60_000 : NaN;
