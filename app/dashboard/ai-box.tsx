@@ -260,7 +260,7 @@ function Stat({ label, value, sub, tone }: { label: string; value: ReactNode; su
   return (
     <div className="min-w-0">
       <div className="text-[13px] text-dim">{label}</div>
-      <div className={`font-display text-[20px] font-semibold leading-tight tnum md:text-[28px] ${tone ?? "text-text"}`}>{value}</div>
+      <div className={`font-display text-[20px] font-semibold leading-tight md:text-[28px] ${tone ?? "text-text"}`}>{value}</div>
       {sub != null && <div className="text-[13px] text-dim tnum">{sub}</div>}
     </div>
   );
