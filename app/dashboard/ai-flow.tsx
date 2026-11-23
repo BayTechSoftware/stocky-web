@@ -23,6 +23,7 @@ import {
 } from "@/lib/aitrader/flow";
 import { marketOpenET } from "@/lib/livequotes";
 import { LABEL } from "./ai-run";
+import { AiChartPanel } from "./ai-charts";
 
 const OPEN_MS = 15_000; // same cadence as LiveUpdates
 const CLOSED_MS = 120_000;
@@ -320,6 +321,9 @@ export function HowItWorksLive({ bookKey, marketOpen: clockOpen }: { bookKey: st
             );
           })}
         </div>
+
+        {/* The stock's chart above its path, when the Mac has sent one (nothing otherwise). */}
+        {symbol && <AiChartPanel key={symbol} bookKey={bookKey} symbol={symbol} marketOpen={clockOpen} quietIfMissing />}
 
         {symbol && (
           <div className="flex flex-wrap items-center gap-2 rounded-lg bg-surface2/70 px-3 py-2 text-xs text-dim">

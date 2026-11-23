@@ -14,6 +14,7 @@ import { ClaudePlan, LABEL, RunDetail, col, phaseName, when } from "./ai-run";
 import { BacktestPanel } from "./ai-backtest";
 import { BoxSettings, OffBadge, RunnerSettings } from "./ai-settings";
 import { HowItWorksLive } from "./ai-flow";
+import { AiChartPanel, AiChartsSection } from "./ai-charts";
 
 const BLURB: Record<AiBookView["key"], string> = {
   mylist: "Fixed rules, no AI. Trades your watchlist on Stocky's signals, within your settings. Runs on the website on weekday schedules.",
@@ -761,7 +762,17 @@ function stopTargetPos(p: AiBookView["positions"][number]): number | null {
   return Math.max(0, Math.min(1, (p.price - p.stop) / (p.target - p.stop)));
 }
 
-function PositionRow({ p, isClaude }: { p: AiBookView["positions"][number]; isClaude: boolean }) {
+function PositionRow({
+  p,
+  isClaude,
+  chart,
+}: {
+  p: AiBookView["positions"][number];
+  isClaude: boolean;
+  /** claude-day / claude-long: a "Chart" toggle that opens the Mac's chart for this stock under the card. */
+  chart?: { bookKey: string; marketOpen: boolean | null };
+}) {
+  const [chartOpen, setChartOpen] = useState(false);
   const short = p.qty < 0;
   const pos = stopTargetPos(p);
   const entryPos =
@@ -769,7 +780,7 @@ function PositionRow({ p, isClaude }: { p: AiBookView["positions"][number]; isCl
       ? Math.max(0, Math.min(1, (p.avgCost - p.stop) / (p.target - p.stop)))
       : null;
   return (
-    <li className="rounded-xl border border-border bg-surface p-3.5">
+    <li className={`min-w-0 rounded-xl border border-border bg-surface p-3.5 ${chartOpen ? "md:col-span-2" : ""}`}>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
@@ -828,6 +839,24 @@ function PositionRow({ p, isClaude }: { p: AiBookView["positions"][number]; isCl
           <span className="text-faint">{isClaude ? (short ? "Why Claude shorted: " : "Why Claude bought: ") : "Why: "}</span>
           {p.reason}
         </p>
+      )}
+
+      {chart && (
+        <div className="mt-2.5 border-t border-border pt-2">
+          <button
+            type="button"
+            onClick={() => setChartOpen((o) => !o)}
+            aria-expanded={chartOpen}
+            className="text-xs font-medium text-accent hover:underline"
+          >
+            {chartOpen ? "Hide chart" : "Chart"}
+          </button>
+          {chartOpen && (
+            <div className="mt-2">
+              <AiChartPanel bookKey={chart.bookKey} symbol={p.symbol} marketOpen={chart.marketOpen} />
+            </div>
+          )}
+        </div>
       )}
     </li>
   );
@@ -1054,7 +1083,7 @@ function nextCheck(lastRunAt: string | null | undefined, runner: Record<string, 
   return new Date(t).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
 }
 
-type Section = "now" | "trades" | "why" | "history" | "settings";
+type Section = "now" | "trades" | "charts" | "why" | "history" | "settings";
 
 export function BookCard({
   b,
@@ -1075,6 +1104,8 @@ export function BookCard({
 }) {
   const isClaude = isClaudeKey(b.key);
   const isLong = b.key === "claude-long";
+  // The Mac sends stock charts (ai_charts) for its own-account Claude boxes only.
+  const hasCharts = OWN_ACCOUNT_KEYS.includes(b.key);
   const off = !boxEnabled(b.settings);
   const run = b.lastRun;
   const defs = defsForBook(b.key);
@@ -1103,6 +1134,7 @@ export function BookCard({
   const tabs: { key: Section; label: string; count?: number }[] = [
     { key: "now", label: "Now", count: b.positions.length + b.pending.length || undefined },
     { key: "trades", label: "Trades", count: b.closed.length || undefined },
+    ...(hasCharts ? [{ key: "charts" as Section, label: "Charts" }] : []),
     { key: "why", label: isClaude ? "Why & review" : "Latest run" },
     ...(isClaude ? [{ key: "history" as Section, label: "History", count: b.today.length || undefined }] : []),
     { key: "settings", label: "Settings" },
@@ -1226,7 +1258,7 @@ export function BookCard({
               ) : (
                 <ul className="grid gap-3 md:grid-cols-2">
                   {b.positions.map((p) => (
-                    <PositionRow key={p.symbol} p={p} isClaude={isClaude} />
+                    <PositionRow key={p.symbol} p={p} isClaude={isClaude} chart={hasCharts ? { bookKey: b.key, marketOpen } : undefined} />
                   ))}
                 </ul>
               )}
@@ -1269,6 +1301,12 @@ export function BookCard({
               </div>
             </Block>
           </>
+        )}
+
+        {section === "charts" && hasCharts && (
+          <Block title="Charts" hint="what Claude sees for each stock">
+            <AiChartsSection bookKey={b.key} marketOpen={marketOpen} />
+          </Block>
         )}
 
         {section === "trades" && (

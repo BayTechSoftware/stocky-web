@@ -10,6 +10,7 @@ import type { AiRun } from "@/lib/aitrader/view";
 import { planLiveSync, syncWindow, type KnownOrder } from "@/lib/aitrader/live";
 import { OWN_ACCOUNT_KEYS, onSharedAccount } from "@/lib/aitrader/boxes";
 import { SYMBOL_SPAN_DAYS, addDays, inRecent, nyDate, nyDayBounds, toEvents, type AiFlowData } from "@/lib/aitrader/flow";
+import { normalizeChart, sortCharts, toChartListItem, type ChartData, type ChartListItem, type ChartRole } from "@/lib/aitrader/charts";
 import { loadOrders, must } from "@/lib/aitrader/rows";
 import { baselineOf, loadAdjustments, sizeOf } from "@/lib/aitrader/cash";
 import { AlpacaError, getClock, getDailyBars, getPaperAccount, listFills, listOrders, type Bar, type Creds } from "@/lib/alpaca";
@@ -721,6 +722,64 @@ export async function loadAiFlow(req: {
   };
 }
 
+/* ---------------- AI Trader: stock charts (ai_charts, written by the Mac) ---------------- */
+
+/** The signed-in user's Claude box id (claude-day / claude-long only). RLS: only their own books. */
+async function chartBook(bookKey: string): Promise<{ supabase: Awaited<ReturnType<typeof createClient>>; bookId: string } | { error: string }> {
+  const { supabase, user } = await uid();
+  if (!user) return { error: "not signed in" };
+  if (!OWN_ACCOUNT_KEYS.includes(bookKey)) return { error: "unknown box" };
+  const { data: book, error } = await supabase.from("ai_books").select("id").eq("user_id", user.id).eq("key", bookKey).maybeSingle();
+  if (error) return { error: error.message };
+  if (!book) return { error: "box not found" };
+  return { supabase, bookId: book.id as string };
+}
+
+/** The symbols a Claude box has charts for (no candles: just what the chips need), held first. */
+export async function loadAiCharts(bookKey: string): Promise<{ items: ChartListItem[]; at: string } | { error: string }> {
+  const b = await chartBook(String(bookKey));
+  if ("error" in b) return b;
+  const { data, error } = await b.supabase
+    .from("ai_charts")
+    .select("symbol, role, updated_at, kind:data->>kind, title:data->>title, status:data->trade->>status, side:data->trade->>side, as_of:data->>as_of")
+    .eq("book_id", b.bookId)
+    .limit(200);
+  if (error) return { error: error.message };
+  const items = ((data ?? []) as unknown[]).map(toChartListItem).filter((i): i is ChartListItem => i != null);
+  return { items: sortCharts(items), at: new Date().toISOString() };
+}
+
+/**
+ * One symbol's chart. `since` = the updated_at the caller already has: when the row hasn't changed
+ * only that is read back ("same"), so polling stays cheap. "none" = no chart row for this symbol.
+ */
+export async function loadAiChart(
+  bookKey: string,
+  symbol: string,
+  since: string | null = null,
+): Promise<
+  | { status: "none" }
+  | { status: "same"; updatedAt: string | null }
+  | { status: "ok"; role: ChartRole; updatedAt: string | null; chart: ChartData }
+  | { error: string }
+> {
+  const sym = cleanSymbol(String(symbol ?? ""));
+  if (!sym) return { error: "unknown symbol" };
+  const b = await chartBook(String(bookKey));
+  if ("error" in b) return b;
+  const head = await b.supabase.from("ai_charts").select("updated_at").eq("book_id", b.bookId).eq("symbol", sym).maybeSingle();
+  if (head.error) return { error: head.error.message };
+  if (!head.data) return { status: "none" };
+  const updatedAt = typeof head.data.updated_at === "string" ? head.data.updated_at : null;
+  if (since && updatedAt && since === updatedAt) return { status: "same", updatedAt };
+
+  const { data, error } = await b.supabase.from("ai_charts").select("role, updated_at, data").eq("book_id", b.bookId).eq("symbol", sym).maybeSingle();
+  if (error) return { error: error.message };
+  if (!data) return { status: "none" };
+  const chart = normalizeChart(data.data, sym);
+  if (!chart) return { error: "this chart's data couldn't be read" };
+  return { status: "ok", role: data.role === "held" ? "held" : "watch", updatedAt: typeof data.updated_at === "string" ? data.updated_at : null, chart };
+}
 
 /* ---------------- AI Trader: Rules backtest ---------------- */
 
