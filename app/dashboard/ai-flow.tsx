@@ -100,19 +100,23 @@ function Node({
   return (
     <li className={`relative ${PLACE[i]}`}>
       <div
-        className={`h-full rounded-xl border p-3 transition ${now ? "border-gain bg-gain/5 ring-2 ring-gain/40" : idle ? "border-dashed border-border bg-surface" : "border-border bg-surface2/40"}`}
+        className={`h-full rounded-lg border px-2.5 py-2 transition ${now ? "border-gain bg-gain/5 ring-2 ring-gain/40" : idle ? "border-dashed border-border bg-surface" : "border-border bg-surface2/40"}`}
         title={STEP_HINT[step]}
       >
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0">
-            <div className="font-mono text-[10px] text-faint tnum">{i + 1}</div>
-            <div className={`font-display text-sm font-semibold ${idle ? "text-dim" : "text-text"}`}>{STEP_LABEL[step]}</div>
+            <div className={`font-display text-[13px] font-semibold ${idle ? "text-dim" : "text-text"}`}>
+              <span className="mr-1 font-mono text-[10px] font-normal text-faint tnum">{i + 1}</span>
+              {STEP_LABEL[step]}
+            </div>
           </div>
           <div className="text-right">
-            <div className={`font-mono text-lg font-semibold leading-none tnum ${idle ? "text-faint" : "text-text"}`}>{s.count}</div>
-            <div className="text-[10px] text-faint">{countLabel}</div>
+            <div className={`font-mono text-base font-semibold leading-none tnum ${idle ? "text-faint" : "text-text"}`} title={countLabel}>
+              {s.count}
+            </div>
           </div>
         </div>
+        {(now || s.failed > 0) && (
         <div className="mt-1 flex flex-wrap items-center gap-1.5">
           {now && (
             <span className="inline-flex items-center gap-1 rounded-full bg-gain/15 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-gain">
@@ -126,19 +130,18 @@ function Node({
             </span>
           )}
         </div>
-        {s.latest ? (
-          <p className="mt-1.5 line-clamp-3 text-[12px] leading-snug text-dim">
-            <span className="font-mono text-[11px] text-faint tnum">{nyTime(s.latest.at, withDay)}</span> {s.latest.title}
+        )}
+        {s.latest && (
+          <p className="mt-1 truncate text-[11px] leading-snug text-dim" title={s.latest.title}>
+            <span className="font-mono text-[10px] text-faint tnum">{nyTime(s.latest.at, withDay)}</span> {s.latest.title}
           </p>
-        ) : (
-          <p className="mt-1.5 text-[12px] leading-snug text-faint">{STEP_HINT[step]}</p>
         )}
         {!symbol && s.symbols.length > 0 && (
-          <div className="mt-2 flex flex-wrap gap-1">
-            {s.symbols.slice(0, 4).map((sym) => (
+          <div className="mt-1.5 flex flex-wrap gap-1">
+            {s.symbols.slice(0, 3).map((sym) => (
               <SymbolChip key={sym} sym={sym} onPick={onPick} />
             ))}
-            {s.symbols.length > 4 && <span className="self-center text-[10px] text-faint">+{s.symbols.length - 4}</span>}
+            {s.symbols.length > 3 && <span className="self-center text-[10px] text-faint">+{s.symbols.length - 3}</span>}
           </div>
         )}
       </div>
@@ -195,6 +198,7 @@ export function HowItWorksLive({ bookKey, marketOpen: clockOpen }: { bookKey: st
   const [day, setDay] = useState<string | null>(null); // null = today
   const [symbol, setSymbol] = useState<string | null>(null);
   const [withWatch, setWithWatch] = useState(false);
+  const [showDetails, setShowDetails] = useState(false); // the step-by-step history: hidden until asked for
   const [limit, setLimit] = useState(PAGE);
   const [data, setData] = useState<AiFlowData | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -219,7 +223,7 @@ export function HowItWorksLive({ bookKey, marketOpen: clockOpen }: { bookKey: st
     const n = ++seq.current;
     setLoading(true);
     try {
-      const r = await loadAiFlow({ bookKey, day, symbol, limit, withWatch });
+      const r = await loadAiFlow({ bookKey, day, symbol, limit: showDetails ? limit : 1, withWatch });
       if (n !== seq.current) return; // a newer request (filter change) superseded this one
       if ("error" in r) setErr(r.error);
       else {
@@ -234,7 +238,7 @@ export function HowItWorksLive({ bookKey, marketOpen: clockOpen }: { bookKey: st
         setNowMs(Date.now());
       }
     }
-  }, [bookKey, day, symbol, limit, withWatch]);
+  }, [bookKey, day, symbol, limit, withWatch, showDetails]);
 
   // Load on open and on every filter change; keep today current, paused while the tab is hidden.
   useEffect(() => {
@@ -301,7 +305,7 @@ export function HowItWorksLive({ bookKey, marketOpen: clockOpen }: { bookKey: st
         </span>
       </summary>
 
-      <div className="space-y-4 border-t border-border p-4">
+      <div className="space-y-3 border-t border-border p-3">
         <div className="flex flex-wrap items-center gap-1.5">
           {days.map((d) => {
             const on = (day ?? today) === d;
@@ -356,7 +360,7 @@ export function HowItWorksLive({ bookKey, marketOpen: clockOpen }: { bookKey: st
               </p>
             ) : (
               <>
-                <ol className="flex flex-col md:grid md:grid-cols-5 md:gap-x-6 md:gap-y-6">
+                <ol className="flex flex-col md:grid md:grid-cols-5 md:gap-x-5 md:gap-y-4">
                   {FLOW_STEPS.map((step, i) => (
                     <Node
                       key={step}
@@ -399,10 +403,28 @@ export function HowItWorksLive({ bookKey, marketOpen: clockOpen }: { bookKey: st
               </>
             )}
 
-            {totalCount(summary) > 0 && (
+            {totalCount(summary) > 0 && !showDetails && (
+              <button type="button" onClick={() => setShowDetails(true)} className="text-xs font-medium text-accent hover:underline">
+                Show details — every step, newest first
+              </button>
+            )}
+
+            {totalCount(summary) > 0 && showDetails && (
               <section>
                 <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
-                  <h4 className={LABEL}>Step by step, newest first</h4>
+                  <h4 className={LABEL}>
+                    Step by step, newest first{" "}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowDetails(false);
+                        setLimit(PAGE);
+                      }}
+                      className="ml-2 font-sans text-[11px] font-medium normal-case tracking-normal text-accent hover:underline"
+                    >
+                      Hide details
+                    </button>
+                  </h4>
                   {!data.symbol && (
                     <label className="flex cursor-pointer items-center gap-1.5 text-[11px] text-dim">
                       <input
@@ -444,10 +466,7 @@ export function HowItWorksLive({ bookKey, marketOpen: clockOpen }: { bookKey: st
           </div>
         )}
 
-        <p className="text-[11px] leading-relaxed text-faint">
-          The Mac writes each step here as it happens. Click a stock to follow it through the steps.
-          {showingToday ? (marketOpen ? " Updates every 15 seconds." : " Updates every 2 minutes while the market is closed.") : ""}
-        </p>
+        <p className="text-[11px] text-faint">Click a stock to follow it through the steps. Hover a step for its full text.</p>
       </div>
     </details>
   );
